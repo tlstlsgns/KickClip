@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blink - Saved Items</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+    /* Figma Design Tokens */
+    :root {
+      --bg-primary: #FFFFFF;
+      --bg-secondary: #F2F2F7;
+      --bg-body: #F9FAFB;
+      --border-default: #D9D9D9;
+      --text-primary: #000000;
+      --text-secondary: rgba(0, 0, 0, 0.2);
+      --bar-border: rgba(0, 0, 0, 0.3);
+      --space-50: 2px;
+      --space-150: 6px;
+      --space-200: 8px;
+      --space-300: 12px;
+      --space-400: 16px;
+      --scroll-blur: 10px;
+      }
+      
+      body {
+      font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg-primary);
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      position: relative;
+      }
+      
+    /* Typography - Figma tokens */
+    .text-title-small {
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 20px;
+      letter-spacing: 0.1px;
+      }
+      
+    .text-title-small-bold {
+      font-size: 14px;
+        font-weight: 600;
+      line-height: 20px;
+      letter-spacing: 0.1px;
+      }
+      
+    .text-label-large {
+        font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+      letter-spacing: 0.1px;
+      }
+      
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+      }
+    ::-webkit-scrollbar-track {
+      background: var(--bg-secondary);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-default);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #757575;
+    }
+    
+    /* Smooth animations for new items */
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      }
+      
+    .animate-in {
+      animation: fadeIn 0.5s ease-out;
+      }
+      
+    /* DataCard styles */
+    .data-card {
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+      }
+      
+    .data-card:hover {
+      background-color: rgba(0, 0, 0, 0.02);
+      }
+      
+    .data-card.active {
+      background-color: rgba(59, 130, 246, 0.08);
+      }
+      
+    /* New DataCard structure for non-image types */
+    .data-card-other {
+      width: 100%;
+    }
+
+    .data-card-header {
+      min-height: 10px;
+    }
+
+    .data-card-icon {
+      flex-shrink: 0;
+        display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .data-card-main {
+      width: 100%;
+      }
+      
+    .data-card-preview {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .data-card-logo {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      aspect-ratio: 1 / 1;
+      height: 100%;
+      }
+      
+    .data-card-logo-image {
+      object-fit: contain;
+      width: 80%;
+      height: auto;
+      }
+      
+    .data-card-infos {
+      min-width: 0;
+      flex: 1 1 0%;
+      }
+      
+    /* Ensure title truncation works properly */
+    .data-card-infos p {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+    }
+
+    /* Title truncation for non-image cards - single line with ellipsis */
+    .data-card-title-truncate {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      }
+      
+    /* Image container for image DataCards */
+    .data-card-image-container {
+      height: 50px;
+      max-height: 50px;
+      overflow: hidden;
+        display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: var(--bg-secondary);
+      transition: max-height 0.3s ease;
+      }
+      
+    .data-card-image.active .data-card-image-container {
+      height: auto;
+      max-height: 800px;
+      }
+      
+    .data-card-image-img {
+        width: 100%;
+        height: auto;
+      object-fit: contain;
+      object-position: center;
+    }
+
+    /* Thumbnail image - preserve aspect ratio, resize with card height */
+    .thumbnail-image {
+      object-fit: contain;
+      width: 100%;
+      height: 100%;
+      }
+      
+    /* Text truncation */
+    .text-truncate {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Timeline header style (WhatsApp-like) */
+    .timeline-header {
+      margin: var(--space-300) 0;
+      user-select: none;
+      }
+      
+    .timeline-header span {
+      flex-shrink: 0;
+      }
+      
+    /* Right section transition */
+    #browser-tab {
+      transition: width 0.3s ease-in-out;
+      }
+    </style>
+  </head>
+<body class="h-screen overflow-hidden">
+  <div class="h-screen flex items-start bg-white">
+    <!-- Browser Section (full width now) -->
+    <div 
+      id="browser-tab" 
+      class="bg-[var(--bg-secondary)] flex flex-col h-full overflow-x-hidden overflow-y-auto shrink-0 w-full"
+    >
+      <!-- Right / Header -->
+      <div class="border-b border-[var(--border-default)] flex items-center h-[40px] overflow-clip px-[var(--space-400)] py-[10px] shrink-0">
+        <p id="browser-tab-title" class="flex-1 text-label-large text-black text-truncate">Select an item from the dock to view</p>
+        <!-- Navigation button (next/previous) - only shown for image type -->
+        <button 
+          id="browser-tab-nav-btn"
+          class="hidden ml-2 p-1 hover:bg-gray-200 rounded transition-colors"
+          title="Next"
+        >
+          <svg id="browser-tab-nav-icon-next" class="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          <svg id="browser-tab-nav-icon-previous" class="hidden w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <button 
+          id="browser-tab-close"
+          class="ml-2 p-1 hover:bg-gray-200 rounded transition-colors"
+          title="Close preview"
+        >
+          <svg class="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+    </div>
+    
+      <!-- Detail Section (parent container) -->
+      <div id="browser-tab-detail" class="flex-1 min-h-0 min-w-0 relative" style="overflow: hidden;">
+        <!-- Image Section (sibling of browser section) -->
+        <div id="browser-tab-image-section" class="hidden absolute inset-0 bg-white flex items-center justify-center overflow-auto">
+          <img id="browser-tab-image-src" src="" alt="" class="max-w-full max-h-full object-contain" />
+    </div>
+    
+        <!-- Browser Section (sibling of image section) -->
+        <div id="browser-tab-browser-section" class="hidden absolute inset-0 bg-[var(--bg-secondary)]" style="transform: translateX(100%); transition: transform 0.3s ease-in-out;">
+          <!-- Webview for non-image types -->
+          <webview 
+            id="browser-tab-webview"
+            src="about:blank"
+            class="w-full h-full"
+            allowpopups
+            webpreferences="allowRunningInsecureContent=true, javascript=yes"
+          ></webview>
+          
+          <!-- Fallback UI when webview fails to load -->
+          <div id="browser-tab-fallback" class="hidden absolute inset-0 bg-[var(--bg-secondary)] flex items-center justify-center">
+            <div class="text-center px-8 max-w-md">
+              <svg class="mx-auto h-12 w-12 text-[var(--text-secondary)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <h3 class="text-title-small-bold text-black mb-2">Preview Not Available</h3>
+              <p class="text-title-small text-[var(--text-secondary)] mb-4">
+                This page cannot be displayed in preview due to security restrictions.
+              </p>
+              <a 
+                id="browser-tab-fallback-link"
+                href="#"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center px-4 py-2 text-title-small font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+              >
+                Open in Browser
+                <svg class="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+            </div>
+                      </div>
+                    </div>
+                  </div>
+              </div>
+            </div>
+
+  <script src="viewer.js"></script>
+  </body>
+</html>

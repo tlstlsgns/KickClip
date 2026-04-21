@@ -1,0 +1,14 @@
+{
+  "name": "kickclip-extension-build",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build tooling for the KickClip Chrome extension",
+  "scripts": {
+    "build:dev": "node scripts/build-dev.js",
+    "build:prod": "node scripts/build-prod.js",
+    "postinstall": "node scripts/build-dev.js"
+  },
+  "devDependencies": {
+    "archiver": "^7.0.1"
+  }
+}

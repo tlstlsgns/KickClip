@@ -1,0 +1,19 @@
+{
+  "name": "client",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "npm run build && electron ./dist/main.js",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "electron": "^31.3.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "firebase": "^12.7.0"
+  }
+}

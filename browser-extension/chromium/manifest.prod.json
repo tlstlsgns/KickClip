@@ -1,0 +1,105 @@
+{
+  "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu8DlT+OvX4Noo9hFmSPeHjswg/udfCPEwsb0qfWd8FTcwe6dIgxHg607Tq5ZXO8F6x1w4cSGppPu3dr6UDGBMX5gSmdIUsBAxgTAAmlg/d4tRXIt36K1v8RZ8xLPOJKxtCUTwhAX4Vu9yHB8HD6e3YdBrFZ8ulcmc8QYhLAFdgWC5Toe96i66txcFNn7cuvBgBEJ+qNQhnOlHhwKTZGmQoXShZNyJboxT+Ii8ITaDMT5+ahwk61TswXgz/aWTnVLNUxkXnVIvudMuFfIYVUs1Wj8IA9JFNZyY6OZtm4IkNwiPaS0nP9Vzm66mHeOdZJeXIJvpFLmqS5nVchfuevdbwIDAQAB",
+  "name": "KickClip",
+  "version": "1.0.0",
+  "description": "KickClip: save URLs and images with Cmd+Shift+S",
+  "icons": {
+    "16": "assets/icons/icon_16.png",
+    "32": "assets/icons/icon_32.png",
+    "48": "assets/icons/icon_48.png",
+    "128": "assets/icons/icon_128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs",
+    "contextMenus",
+    "windows",
+    "sidePanel",
+    "identity",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://api-gstf2hxbiq-du.a.run.app/*",
+    "https://api-hn4mxotviq-du.a.run.app/*",
+    "http://localhost:3000/*",
+    "http://localhost:3001/*",
+    "https://www.instagram.com/*",
+    "https://*.cdninstagram.com/*",
+    "https://*.fbcdn.net/*",
+    "https://mail.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "https://mail.naver.com/*",
+    "https://*.naver.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": [
+        "https://claude.ai/*",
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*"
+      ],
+      "js": ["config.js", "html2canvas.bundle.js", "content-loader.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "config.js",
+        "assets/icons/icon_16.png",
+        "assets/icons/icon_32.png",
+        "assets/icons/icon_48.png",
+        "assets/icons/icon_128.png",
+        "assets/favicons/google.png",
+        "assets/favicons/naver.png",
+        "brandConfig.js",
+        "stateLite.js",
+        "coreEngine.js",
+        "itemDetector.js",
+        "dataExtractor.js",
+        "uiManager.js",
+        "urlResolver.js",
+        "coreEntry.js",
+        "sidepanel.html",
+        "sidepanel.js",
+        "sidepanel.css",
+        "firebase-bundle.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "commands": {
+    "save-url": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Save current URL or hovered image"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "oauth2": {
+    "client_id": "108278020684-gc4o3rfjldhb5bvjo8fgm3shnbdj8j8c.apps.googleusercontent.com",
+    "scopes": ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.readonly"]
+  },
+  "action": {
+    "default_title": "KickClip",
+    "default_icon": {
+      "16": "assets/icons/icon_16.png",
+      "32": "assets/icons/icon_32.png",
+      "48": "assets/icons/icon_48.png",
+      "128": "assets/icons/icon_128.png"
+    },
+    "default_popup": ""
+  }
+}

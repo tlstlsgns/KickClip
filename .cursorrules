@@ -1,0 +1,273 @@
+Architecture Overview
+
+Multi-component system: Electron desktop app, Node.js server, browser extensions, and Firebase backend.
+
+
+
+1. Desktop Client (Electron Application)
+
+Location: /client/
+
+Technology Stack:
+
+Electron v31.3.1 — Desktop app framework
+
+TypeScript v5.6.3 — Type-safe JavaScript
+
+Node.js — Runtime environment
+
+Architecture:
+
+Main Process (src/main.ts): Window management, IPC, system integration
+
+Renderer Process (viewer.html + viewer.js): UI rendering
+
+Preload Script (src/preload/preload.ts): Secure IPC bridge with contextIsolation: true
+
+Security:
+
+nodeIntegration: false
+
+contextIsolation: true
+
+IPC via contextBridge for secure communication
+
+Build System:
+
+TypeScript compiler (tsc)
+
+Output: dist/ directory
+
+Scripts: npm run build → npm run dev
+
+
+
+2. Backend Server
+
+Location: /server/
+
+Technology Stack:
+
+Node.js with Express v4.19.2
+
+TypeScript v5.6.3
+
+ES Modules ("type": "module")
+
+Key Libraries:
+
+cheerio — HTML parsing/metadata extraction
+
+node-fetch — HTTP requests
+
+robots-parser — robots.txt parsing
+
+firebase-admin — Server-side Firebase operations
+
+Functionality:
+
+REST API (/api/v1/save-url)
+
+Metadata extraction from URLs
+
+Local HTTP server (port 3000)
+
+Extension communication
+
+
+
+3. Browser Extensions
+
+Location: /browser-extension/
+
+Supported Platforms:
+
+Chromium (Chrome, Arc, Edge)
+
+Firefox
+
+Safari
+
+Technology:
+
+Vanilla JavaScript (no framework)
+
+Browser Extension APIs
+
+Content scripts for page interaction
+
+Background scripts for shortcuts
+
+Features:
+
+Global keyboard shortcuts (Cmd+Shift+S)
+
+Image hover detection
+
+URL capture from active tab
+
+Communication with Electron app via localhost
+
+
+
+4. Backend Services (Firebase)
+
+Technology:
+
+Firebase v12.7.0 (Web SDK)
+
+Firebase Admin SDK v13.6.0 (server-side)
+
+Services Used:
+
+Authentication: Google OAuth, Instagram OAuth
+
+Firestore: Real-time database
+
+Collections: users/{userId}/items, users/{userId}/directories, users/{userId}/instagramSession
+
+Security Rules: Custom rules for user data isolation
+
+
+
+5. Frontend (Renderer Process)
+
+Technology:
+
+Vanilla JavaScript (no React/Vue/Angular)
+
+HTML5 + CSS3
+
+Custom CSS variables for theming
+
+UI Structure:
+
+Single-window application
+
+Sidebar layout (Dock + Content area)
+
+Drag-and-drop functionality
+
+Real-time Firestore listeners
+
+Styling:
+
+CSS custom properties (--border-default, --bg-primary, etc.)
+
+Flexbox layouts
+
+Responsive design
+
+
+
+6. Development Tools & Configuration
+
+TypeScript Configuration:
+
+Target: ES2020
+
+Module: CommonJS (client), ES Modules (server)
+
+Strict mode enabled
+
+Build Process:
+
+TypeScript compilation (tsc)
+
+Output to dist/ directory
+
+Electron loads compiled JavaScript
+
+Environment:
+
+dotenv for environment variables
+
+Firebase config from env vars with fallbacks
+
+
+
+7. Communication Flow
+
+Browser Extension → Local HTTP Server (port 3000) → Electron Main Process
+
+                                                          ↓
+
+Electron Main Process ↔ IPC ↔ Renderer Process ↔ Preload Script
+
+                                                          ↓
+
+Firebase (Firestore + Auth) ← Electron Main Process (Firebase SDK)
+
+
+
+Key Communication:
+
+IPC (Inter-Process Communication) between main and renderer
+
+HTTP for extension-to-app communication
+
+Firebase SDK for cloud services
+
+Local HTTP servers for inter-process communication
+
+
+
+8. Data Flow
+
+User Action: Keyboard shortcut in browser
+
+Extension: Captures URL/tab info
+
+Server: Receives save request, extracts metadata
+
+Electron: Saves to Firestore via Firebase SDK
+
+Renderer: Real-time listener updates UI
+
+Firestore: Stores data with user isolation
+
+
+
+9. Security Features
+
+Context Isolation: Renderer cannot access Node.js directly
+
+Preload Bridge: Secure API exposure via contextBridge
+
+Firestore Security Rules: User-based data access control
+
+OAuth Authentication: Google/Instagram sign-in
+
+
+
+Summary
+
+Desktop: Electron + TypeScript
+
+Server: Node.js + Express + TypeScript
+
+Extensions: Vanilla JavaScript
+
+Backend: Firebase (Auth + Firestore)
+
+Frontend: Vanilla JavaScript + HTML/CSS
+
+Build: TypeScript compiler
+
+Communication: IPC, HTTP, Firebase SDK
+
+This is a full-stack TypeScript application using Electron for desktop, Node.js for server, and Firebase for backend services, with browser extensions for cross-platform URL capture.
+
+
+
+10. Sync/Async Process Parity (browser-extension/chromium)
+
+When modifying hover detection, container extraction, or host-count logic:
+
+- Visibility: Use isVisibleForHostCheck (containerExtractor) in BOTH Sync (countDiscoveryHostsIn) and Async (countDiscoveryHostsResolved). Never use a relaxed check in Async that could re-adopt containers rejected by Sync.
+
+- Context inheritance: Async must inherit effectiveBranchMode (host/base_domain) and preResolved from Main-Process. In host mode, use preResolvedMain (not preResolvedBroad) for Late-expansion.
+
+- Dual-process application: All logic updates (host filtering, intent detection, structural rules) must be applied to BOTH the Ascend Loop (Sync) and Late-Expansion/Purity Check (Async). Use shared utilities to prevent drift.
+
+- Consistency audit: Set window.__blinkInconsistencyCheck = true to log [Inconsistency-Warning] when Async expands beyond Sync boundaries.

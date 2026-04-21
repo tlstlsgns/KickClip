@@ -1,0 +1,30 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "GOOGLE_APPLICATION_CREDENTIALS=./service-account.json tsx watch src/server.ts"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "dotenv": "^16.4.5",
+    "entities": "^7.0.0",
+    "express": "^4.19.2",
+    "firebase-admin": "^13.6.0",
+    "node-fetch": "^2.7.0",
+    "puppeteer": "^24.40.0",
+    "robots-parser": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node-fetch": "^2.6.13",
+    "esbuild": "^0.27.4",
+    "html2canvas": "^1.4.1",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.3"
+  }
+}

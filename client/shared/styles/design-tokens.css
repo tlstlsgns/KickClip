@@ -1,0 +1,30 @@
+/**
+ * Design Tokens - Shared across Login and Dashboard pages
+ * Brand accent is set dynamically from window.BRAND via brandConfig.js
+ */
+:root {
+  --bg-primary: #f2f2f7;
+  --bg-secondary: #F2F2F7;
+  --bg-body: #F9FAFB;
+  --border-default: #d9d9d9;
+  --border-secondary: #757575;
+  --blink-accent: var(--blink-accent, #BC13FE);
+  --blink-accent-rgb: var(--blink-accent-rgb, 188, 19, 254);
+  --border-active: var(--blink-accent);
+  --bar-border: rgba(0, 0, 0, 0.3);
+  --text-primary: #000000;
+  --text-secondary: rgba(0, 0, 0, 0.2);
+  --labels-secondary: rgba(60, 60, 67, 0.6);
+  --overlay-default: rgba(0, 0, 0, 0.2);
+  --space-50: 2px;
+  --space-100: 4px;
+  --space-150: 6px;
+  --space-200: 8px;
+  --space-300: 12px;
+  --space-400: 16px;
+  --corner-extra-small: 4px;
+  --corner-small: 6px;
+  --corner-medium: 12px;
+  --scroll-blur: 10px;
+  --sidebar-width: 175px;
+}

@@ -1,0 +1,33 @@
+{
+  "manifest_version": 2,
+  "name": "Blink",
+  "version": "1.0.0",
+  "description": "Blink: save URLs and images with Cmd+Shift+S",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "contextMenus",
+    "http://localhost:3000/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "commands": {
+    "save-url": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Save current URL or hovered image"
+    }
+  }
+}
+

@@ -1,0 +1,19 @@
+{
+  "name": "window-monitor",
+  "version": "1.0.0",
+  "description": "Native macOS module to monitor and adjust window positions",
+  "main": "index.js",
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "build": "node-gyp rebuild",
+    "rebuild:electron": "electron-rebuild -f -w window_monitor"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.0.0"
+  },
+  "devDependencies": {
+    "node-gyp": "^10.0.0"
+  },
+  "gypfile": true
+}
+

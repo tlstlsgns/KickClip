@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blink - Dashboard</title>
+    <script src="../../brandConfig.js"></script>
+    <script>
+      try {
+        const BRAND = window.BRAND || { NAME: 'Blink' };
+        document.title = `${BRAND.NAME} - Dashboard`;
+      } catch (e) {}
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../shared/styles/design-tokens.css">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; overflow: hidden; background: var(--bg-primary); }
+      body { font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg-primary); margin: 0; padding: 0; display: flex; }
+      #app-container { width: max-content; height: 100vh; display: flex; flex-direction: row; overflow: hidden; position: relative; }
+      #dock-container { width: 175px; min-width: 175px; max-width: 175px; height: 100vh; background: rgba(255, 255, 255, 0.7); display: flex; flex-direction: column; overflow: hidden; gap: 8px; border-right: 1px solid var(--border-default); -webkit-app-region: no-drag; flex-shrink: 0; transition: background-color 0.3s ease-in-out, border-right-color 0.3s ease-in-out; }
+      #dock-container:hover { background: rgba(255, 255, 255, 1); border-right-color: rgba(0, 0, 0, 0.2); }
+      #app-container.is-open #dock-container { background: rgba(255, 255, 255, 1); border-right-color: rgba(0, 0, 0, 0.2); }
+      #dock-top { width: 100%; height: auto; display: flex; flex-direction: column; overflow: hidden; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+      #dock-header { width: 100%; height: 50px; padding: 6px; border-bottom: 1px solid var(--border-default); flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
+      #header-profile { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 100%; }
+      #profile-image { width: 30px; height: 30px; background: white; border-radius: 30px; flex-shrink: 0; background-size: cover; background-position: center; background-repeat: no-repeat; }
+      #profile-infos { display: flex; flex-direction: column; justify-content: center; min-width: 0; flex: 1; line-height: 1.3; letter-spacing: 0.1px; }
+      .profile-name { font-family: 'Roboto', sans-serif; font-weight: 600; font-size: 14px; line-height: 1.3; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .profile-email { font-family: 'Roboto', sans-serif; font-style: italic; font-weight: 400; font-size: 9px; line-height: 1.3; color: var(--overlay-default); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .signout-btn { padding: 4px 8px; font-size: 11px; background: transparent; border: 1px solid var(--border-default); border-radius: var(--corner-extra-small); cursor: pointer; color: var(--labels-secondary); transition: all 0.2s; }
+      .signout-btn:hover { color: var(--text-primary); border-color: var(--border-secondary); }
+      #dock-pin, #drawer-toggle { width: 28px; height: 28px; border: 1px solid var(--border-default); border-radius: 6px; background: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: background 0.2s ease, border-color 0.2s ease; }
+      #dock-pin:hover, #drawer-toggle:hover { background: rgba(0, 0, 0, 0.04); border-color: rgba(0, 0, 0, 0.25); }
+      #dock-pin.unpinned svg { stroke: var(--overlay-default); }
+      #dock-pin svg, #drawer-toggle svg { width: 14px; height: 14px; stroke: #555; }
+      #drawer-toggle { margin-left: auto; }
+      #dock-main { width: 100%; height: 100%; flex: 1 1 0%; min-height: 0; display: flex; flex-direction: column; position: relative; gap: 10px; align-self: stretch; }
+      #dock-function { display: flex; flex-direction: column; align-items: flex-start; padding: 0; width: 100%; min-height: 0; flex-shrink: 0; overflow: hidden; gap: 0; height: 0.1px; opacity: 0; pointer-events: none; transition: height 0.4s ease, opacity 0.3s ease; }
+      #dock-function.active { pointer-events: auto; }
+      #dock-top.app-focused #dock-function.active { opacity: 1; }
+      #create-directory-btn { width: fit-content; padding: 4px 8px; display: flex; align-items: center; background: transparent; border: none; cursor: pointer; font-family: 'Roboto', sans-serif; font-size: 12px; font-weight: 500; color: var(--text-primary); margin-left: 6px; opacity: 0.5; }
+      #create-directory-btn:hover { opacity: 1; }
+      #directory-list { display: flex; flex-direction: column; width: 100%; gap: 8px; padding: 6px; flex-shrink: 0; position: relative; }
+      .directory-item { width: 100%; min-height: 50px; display: flex; flex-direction: column; background: var(--bg-primary); border: 1px solid var(--border-default); border-radius: var(--corner-extra-small); cursor: pointer; flex-shrink: 0; position: relative; overflow: hidden; -webkit-app-region: no-drag; transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1.0); }
+      .directory-item:hover { background: var(--bg-secondary); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); transform: translateY(-1px); }
+      .directory-item.drag-over { background: rgba(var(--blink-accent-rgb), 0.08); border: 2px solid var(--border-active); box-shadow: 0 0 20px rgba(var(--blink-accent-rgb), 0.2); }
+      .directory-item-header { width: 100%; height: 50px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-shrink: 0; -webkit-app-region: no-drag; }
+      .directory-chevron { width: 12px; height: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: transform 0.2s ease; transform: rotate(0deg); color: var(--text-secondary); }
+      .directory-item[data-expanded="true"] .directory-chevron { transform: rotate(90deg); }
+      .directory-chevron svg { width: 12px; height: 12px; stroke: var(--text-secondary); }
+      .directory-items-container { display: none; flex-direction: column; padding: 4px 10px 10px 30px; gap: 8px; width: 100%; box-sizing: border-box; min-height: 20px; position: relative; }
+      .directory-item[data-expanded="true"] .directory-items-container { display: flex; }
+      .directory-items-container:empty::after { content: 'Drop items here'; display: block; padding: 20px; text-align: center; color: var(--text-secondary); font-size: 12px; font-family: 'Roboto', sans-serif; opacity: 0.5; pointer-events: none; }
+      .directory-name-input, .directory-name-display { flex: 1; min-width: 0; height: 100%; padding: 0 8px; border: none; background: transparent; font-family: 'Roboto', sans-serif; font-size: 14px; font-weight: 400; color: var(--text-primary); outline: none; cursor: text; }
+      .directory-name-input:focus { background: var(--bg-secondary); border-radius: 4px; }
+      .directory-name-display { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; }
+      .directory-delete-btn { width: 24px; height: 24px; padding: 0; display: flex; align-items: center; justify-content: center; background: transparent; border: none; cursor: pointer; flex-shrink: 0; opacity: 0.5; transition: opacity 0.2s; }
+      .directory-item:hover .directory-delete-btn { opacity: 1; }
+      .directory-delete-btn:hover { opacity: 1; background: rgba(255, 0, 0, 0.1); border-radius: 4px; }
+      .directory-delete-btn svg { width: 16px; height: 16px; stroke: var(--text-secondary); }
+      #dock-clear { display: flex; width: 100%; height: 44px; border-top: 1px solid var(--border-default); align-items: center; justify-content: center; flex-shrink: 0; }
+      #clear-all-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--text-primary); background: var(--bg-secondary); border: 1px solid var(--border-default); border-radius: 999px; cursor: pointer; flex-shrink: 0; padding: 0; transition: all 0.2s; }
+      #clear-all-btn:hover { background: rgba(255, 0, 0, 0.08); border-color: rgba(255, 0, 0, 0.4); }
+      #clear-all-btn svg { width: 20px; height: 20px; stroke: var(--text-secondary); }
+      #clear-all-btn:hover svg { stroke: rgba(255, 0, 0, 0.8); }
+      #dock-itemlist { display: flex; flex-direction: column; padding: 6px; gap: 8px; width: 100%; flex: 1 1 0%; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; position: relative; -webkit-app-region: no-drag; }
+      .card-container { width: 100%; flex-shrink: 0; box-sizing: border-box; overflow: hidden; }
+      .card-wrapper { background: white; border: 1px solid var(--border-default); border-radius: var(--corner-extra-small); margin: 0; padding: 0; width: 100%; cursor: grab; transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1.0), height 0.3s cubic-bezier(0.2, 0, 0, 1), opacity 0.3s ease; flex-shrink: 0; overflow: hidden; box-sizing: border-box; -webkit-user-drag: element !important; user-select: none; -webkit-app-region: no-drag; }
+      .card-wrapper[data-expanding-wrapper="true"], .card-wrapper[data-preserve-animation="true"], .card-wrapper.is-dragging-source { overflow: hidden; }
+      .card-wrapper:hover { border-color: var(--border-secondary); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); transform: translateY(-1px); }
+      .card-wrapper.active { border-color: var(--border-active); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+      .card-wrapper.is-dragging-source, .card-wrapper[data-dragging-source="true"] { pointer-events: none !important; }
+      .card-wrapper[data-guide-wrapper="true"] { height: 2px !important; background: var(--border-active) !important; border: none !important; border-radius: 2px !important; margin: 3px 0 !important; padding: 0 !important; box-shadow: 0 0 4px rgba(var(--blink-accent-rgb), 0.3) !important; pointer-events: none !important; overflow: hidden !important; min-height: 0 !important; flex-shrink: 0 !important; }
+      .data-card { background: transparent; border: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-100); width: 100%; flex-shrink: 0; -webkit-app-region: no-drag; }
+      .data-card * { pointer-events: none !important; }
+      .dnd-placeholder { width: 100%; margin: 0; flex-shrink: 0; background: rgba(var(--blink-accent-rgb), 0.05); border: 2px dashed var(--border-active); border-radius: var(--corner-extra-small); pointer-events: none !important; display: none; opacity: 0; height: 0; box-sizing: border-box; overflow: hidden; }
+      #dock-itemlist > .card-container .card-wrapper, .directory-items-container > .card-container .card-wrapper, #dock-itemlist > .card-wrapper, .directory-items-container > .card-wrapper, #directory-list > .directory-item { transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1); }
+      .data-card.dragging { opacity: 0.4; pointer-events: none !important; transform: scale(0.98); }
+      .card-wrapper.is-dragging-source .data-card { opacity: 0.3; }
+      .data-card-domain-section { display: flex; align-items: center; flex: 1; min-width: 0; overflow: hidden; }
+      .data-card-domain-text { font-family: 'Roboto', sans-serif; font-weight: 500; font-size: 10px; line-height: 1.3; color: var(--overlay-default); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .data-card-main { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: var(--space-100); width: 100%; min-width: 0; padding: var(--space-100) var(--space-150); box-sizing: border-box; }
+      .data-card-imgcontainer { width: 100%; height: 40px; min-height: 40px; border-radius: var(--corner-small); overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: var(--bg-primary); }
+      .data-card-imgcontainer.is-favicon { border-radius: 50%; background-color: #f0f0f0; }
+      .data-card-imgcontainer.is-favicon .data-card-image { width: 100%; height: 100%; object-fit: cover; }
+      .data-card-image { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .data-card-context { display: flex; flex-direction: column; justify-content: center; min-width: 0; width: 100%; }
+      .data-card-main p.data-card-title { min-width: 0; margin: 0 0 2px 0; }
+      .data-card-title { font-family: 'Roboto', sans-serif; font-weight: 600; font-size: 12px; line-height: 1.3; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+      .data-card-url { font-family: 'Roboto', sans-serif; font-weight: 400; font-size: 11px; line-height: 1.3; color: #aaa; opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: transparent; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb { background: rgba(var(--blink-accent-rgb), 0.22); border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: rgba(var(--blink-accent-rgb), 0.30); }
+      #content-area { width: 0px; height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg-secondary); -webkit-app-region: no-drag; overflow: hidden; transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1); border-left: 0 solid transparent; flex-shrink: 0; }
+      #content-area.is-open { width: 500px; border-left: 1px solid var(--border-default); }
+      #content-placeholder { text-align: center; color: var(--text-secondary); font-family: 'Roboto', sans-serif; font-size: 16px; font-weight: 400; }
+      /* Delete button */
+      .data-card-header { position: relative; display: flex; flex-direction: row; align-items: stretch; justify-content: space-between; width: 100%; height: 20px; box-sizing: border-box; padding: var(--space-100) var(--space-150); }
+      .data-card-delete { display: flex; align-items: center; justify-content: center; align-self: stretch; aspect-ratio: 1 / 1; opacity: 0.3; cursor: pointer; flex-shrink: 0; transition: opacity 150ms ease; pointer-events: auto !important; }
+      .data-card-delete * { pointer-events: auto !important; }
+      .data-card-delete:hover { opacity: 1; }
+      .data-card-delete-btn { width: 100%; aspect-ratio: 1 / 1; border-radius: 50%; background: #ef4444; display: flex; align-items: center; justify-content: center; }
+      .data-card-delete-btn svg { width: 55%; height: 55%; stroke: #fff; stroke-width: 2.5; fill: none; }
+      /* Delete pending mode */
+      .data-card-header { transition: background 200ms ease, border-radius 200ms ease; }
+      .data-card-header.delete-pending { background: #ef4444; border-radius: 4px; }
+      .data-card-header.delete-pending .data-card-domain-section { color: #fff; font-size: 11px; font-weight: 500; display: flex; align-items: center; }
+      .data-card-header.delete-pending .data-card-delete { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <div id="app-container">
+      <div id="dock-container">
+        <div id="dock-top">
+          <div id="dock-header">
+            <div id="header-profile">
+              <div id="profile-image"></div>
+              <div id="profile-infos">
+                <div class="profile-name" id="profile-name">UserName</div>
+                <div class="profile-email" id="profile-email">user@example.com</div>
+              </div>
+            </div>
+            <button id="signout-btn" class="signout-btn">Sign out</button>
+            <button id="drawer-toggle" aria-label="Toggle content drawer"></button>
+          </div>
+          <div id="dock-function" class="active">
+            <button id="create-directory-btn">+ Create Directory</button>
+            <div id="directory-list"></div>
+          </div>
+        </div>
+        <div id="dock-main">
+          <div id="dock-itemlist"></div>
+          <div id="dock-clear">
+            <button id="clear-all-btn" aria-label="Clear All" title="Clear All">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="content-area">
+        <div id="content-placeholder">Not updated yet</div>
+      </div>
+    </div>
+    <script src="../../shared/utils/api.js"></script>
+    <script src="./main.js"></script>
+  </body>
+</html>
