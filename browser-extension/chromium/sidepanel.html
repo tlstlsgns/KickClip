@@ -545,6 +545,11 @@
       overflow: hidden;
       flex-shrink: 0;
     }
+    /* image_card uses a taller card (130px) to give more space to the thumbnail
+       in the 3-column grid layout. Image category + SNS+contents cards get this. */
+    .card-container.image_card .data-card {
+      height: 130px;
+    }
     .data-card * { pointer-events: none !important; }
 
     /* Header: domain + delete button */
@@ -695,6 +700,15 @@
 
     /* extracted: centered, fills width */
     .card-container.portrait_extracted_card .data-card-image--extracted {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      object-position: center;
+    }
+
+    /* youtube-thumbnail: centered, fills width (same as extracted) */
+    .card-container.portrait_extracted_card .data-card-image--youtube-thumbnail {
       width: 100%;
       height: 100%;
       display: block;
@@ -1015,7 +1029,7 @@
       <div id="sp-filter">
         <div id="sp-tab-bar">
           <button class="sp-tab active" data-tab="Img">Img</button>
-          <button class="sp-tab" data-tab="Video">Video</button>
+          <button class="sp-tab" data-tab="SNS">SNS</button>
           <button class="sp-tab" data-tab="Mail">Mail</button>
           <button class="sp-tab" data-tab="Pages">Pages</button>
         </div>
@@ -1047,8 +1061,8 @@
           <div class="sp-category-section" data-category="Img">
             <div class="sp-category-list" data-category-list="Img"></div>
           </div>
-          <div class="sp-category-section" data-category="Video">
-            <div class="sp-category-list" data-category-list="Video"></div>
+          <div class="sp-category-section" data-category="SNS">
+            <div class="sp-category-list" data-category-list="SNS"></div>
           </div>
           <div class="sp-category-section" data-category="Mail">
             <div class="sp-category-list" data-category-list="Mail"></div>

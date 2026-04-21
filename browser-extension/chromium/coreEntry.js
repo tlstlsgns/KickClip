@@ -37,6 +37,10 @@ import {
   detectItemCategory,
   triggerShutterEffect,
 } from './coreEngine.js';
+import {
+  extractYouTubeShortcodeFromUrl,
+  getYouTubeThumbnailUrl,
+} from './dataExtractor.js';
 
 let _kcUserReady = false; // true when kickclipUserId is confirmed
 let _pageMetaInitialized = false;
@@ -1624,13 +1628,22 @@ async function saveActiveCoreItem(request = {}) {
         return { success: false, reason: 'missing-url' };
       }
 
+      const youtubeShortcode = extractYouTubeShortcodeFromUrl(url);
+      const youtubeThumbnailUrl = youtubeShortcode ? getYouTubeThumbnailUrl(youtubeShortcode) : '';
+      const isYouTubeSave = !!youtubeThumbnailUrl;
+
       let pageScreenshotBase64 = null;
       let pageScreenshotBgColor = null;
-      // capturePageScreenshotBase64 handles waitForRepaint + 32ms internally
-      const pageScreenshotResult = await capturePageScreenshotBase64();
-      if (pageScreenshotResult) {
-        pageScreenshotBase64 = pageScreenshotResult.dataUrl;
-        pageScreenshotBgColor = pageScreenshotResult.backgroundColor;
+      if (!isYouTubeSave) {
+        // capturePageScreenshotBase64 handles waitForRepaint + 32ms internally
+        const pageScreenshotResult = await capturePageScreenshotBase64();
+        if (pageScreenshotResult) {
+          pageScreenshotBase64 = pageScreenshotResult.dataUrl;
+          pageScreenshotBgColor = pageScreenshotResult.backgroundColor;
+        }
+      } else {
+        pageScreenshotBase64 = null;
+        pageScreenshotBgColor = null;
       }
 
       // Request userId from background.js (cached from sidepanel sign-in)
@@ -1718,8 +1731,9 @@ async function saveActiveCoreItem(request = {}) {
         ...(pageConfirmedType ? { confirmed_type:  pageConfirmedType } : {}),
         ...(pageSender        ? { sender:          pageSender }        : {}),
         ...(pageCategory === 'Page' ? { page_description: pageDescription } : {}),
-        is_portrait: pageCategory === 'Page' && !!pageScreenshotBase64,
-        img_url_method: 'screenshot',
+        is_portrait: !isYouTubeSave && pageCategory === 'Page' && !!pageScreenshotBase64,
+        img_url_method: isYouTubeSave ? 'youtube-thumbnail' : 'screenshot',
+        ...(isYouTubeSave ? { img_url: youtubeThumbnailUrl } : {}),
         ...(userId ? { userId } : {}),
         ...(gmailToken ? { gmail_token: gmailToken } : {}),
         ...(naverCookies ? { naver_cookies: naverCookies } : {}),
@@ -1735,8 +1749,8 @@ async function saveActiveCoreItem(request = {}) {
             tempId,
             url,
             title:              title || url,
-            imgUrl:             pageScreenshotBase64 || '',
-            isScreenshot:       !!pageScreenshotBase64,
+            imgUrl:             isYouTubeSave ? youtubeThumbnailUrl : (pageScreenshotBase64 || ''),
+            isScreenshot:       !isYouTubeSave && !!pageScreenshotBase64,
             screenshotPadding:  0,
             screenshotBgColor:  pageScreenshotBgColor || '',
             category:           pageCategory || '',
@@ -1744,7 +1758,7 @@ async function saveActiveCoreItem(request = {}) {
             confirmedType:      pageConfirmedType || '',
             sender:             pageSender || '',
             page_description:   pageDescription || '',
-            img_url_method:     'screenshot',
+            img_url_method:     isYouTubeSave ? 'youtube-thumbnail' : 'screenshot',
             createdAt:           Date.now(),
           });
         } catch { /* Side Panel may not be open — silently ignore */ }
@@ -1780,6 +1794,9 @@ async function saveActiveCoreItem(request = {}) {
     const meta = state.lastExtractedMetadata;
     const url = String(meta?.activeHoverUrl || activeUrl).trim();
     if (!url) return { success: false, reason: 'missing-url' };
+    const youtubeShortcode = extractYouTubeShortcodeFromUrl(url);
+    const youtubeThumbnailUrl = youtubeShortcode ? getYouTubeThumbnailUrl(youtubeShortcode) : '';
+    const isYouTubeSave = !!youtubeThumbnailUrl;
 
     // Step 1: hide CoreHighlight + StatusBadge for screenshot
     const coreOverlayEl = document.getElementById('blink-highlight-overlay');
@@ -1788,7 +1805,9 @@ async function saveActiveCoreItem(request = {}) {
     if (coreBadgeEl)   { coreBadgeEl.style.transition = '';   coreBadgeEl.style.opacity = '0'; }
 
     const title = String(meta?.title || document.title || url).trim();
-    const imgUrl = String(request?.img_url || meta?.image?.url || '').trim();
+    const imgUrl = isYouTubeSave
+      ? youtubeThumbnailUrl
+      : String(request?.img_url || meta?.image?.url || '').trim();
     // Reflects whether extractImageFromCoreItem() produced a result —
     // independent of which URL is ultimately used as img_url.
     const isExtractedImg = !!(meta?.image?.url && String(meta.image.url).trim().length > 0);
@@ -2013,7 +2032,9 @@ async function saveActiveCoreItem(request = {}) {
       ...(Number.isFinite(overlayRatio) ? { overlay_ratio: overlayRatio } : {}),
       is_portrait: isPortraitExtracted,
       ...(isPage ? { page_description: coreItemPageDescription } : {}),
-      img_url_method: isExtractedImg ? 'extracted' : 'favicon',
+      img_url_method: isYouTubeSave
+        ? 'youtube-thumbnail'
+        : (isExtractedImg ? 'extracted' : 'favicon'),
     };
 
     // Optimistic UI: notify Side Panel to show a temporary card immediately
@@ -2035,7 +2056,9 @@ async function saveActiveCoreItem(request = {}) {
           confirmedType:      String(meta?.confirmedType || '').trim(),
           sender:             String(meta?.sender        || '').trim(),
           ...(isPage ? { page_description: coreItemPageDescription } : {}),
-          img_url_method: isExtractedImg ? 'extracted' : 'favicon',
+          img_url_method: isYouTubeSave
+            ? 'youtube-thumbnail'
+            : (isExtractedImg ? 'extracted' : 'favicon'),
           createdAt:          Date.now(),
         });
       } catch { /* Side Panel may not be open — silently ignore */ }

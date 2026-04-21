@@ -151,7 +151,7 @@ function mountShortcutRecorder() {
 }
 
 // ── Category section order ────────────────────────────────────────────────
-const CATEGORY_ORDER = ['Img', 'Video', 'Mail', 'Pages'];
+const CATEGORY_ORDER = ['Img', 'SNS', 'Mail', 'Pages'];
 
 let _activeTab = 'Img';
 
@@ -165,7 +165,7 @@ function setupTabHandlers() {
       btn.classList.add('active');
       const wrap = document.getElementById('sp-itemlist-wrap');
       if (wrap) {
-        const tabIndex = ['Img', 'Video', 'Mail', 'Pages'].indexOf(tab);
+        const tabIndex = ['Img', 'SNS', 'Mail', 'Pages'].indexOf(tab);
         wrap.style.transform = tabIndex > 0 ? `translateX(-${tabIndex * 25}%)` : 'translateX(0%)';
       }
     });
@@ -173,14 +173,42 @@ function setupTabHandlers() {
 }
 
 /**
- * Returns the target list box key ('Img' | 'Video' | 'Mail' | 'Pages') for a given item.
+ * Normalizes both legacy and new-schema item category/confirmedType.
+ * Returns an object { category, confirmedType } in the new schema.
+ */
+function normalizeItemCategoryAndType(item) {
+  const rawCategory = (item?.category || '').trim();
+  const rawType = (item?.confirmed_type || item?.confirmedType || '').trim();
+
+  // Legacy 'Contents' → Image (if Image confirmed_type) or Page (anything else, including Video)
+  if (rawCategory === 'Contents') {
+    if (rawType === 'Image') return { category: 'Image', confirmedType: '' };
+    return { category: 'Page', confirmedType: '' };
+  }
+
+  // SNS: normalize confirmedType to 'contents' or 'post'
+  if (rawCategory === 'SNS') {
+    if (rawType === 'Image' || rawType === 'Video' || rawType === 'contents') {
+      return { category: 'SNS', confirmedType: 'contents' };
+    }
+    // 'Post', 'Page', 'post', empty, or anything else → 'post'
+    return { category: 'SNS', confirmedType: 'post' };
+  }
+
+  // Image / Mail / Page / anything else — return as-is; confirmedType should be empty for these
+  return { category: rawCategory, confirmedType: rawType };
+}
+
+/**
+ * Returns the target list box key ('Img' | 'SNS' | 'Mail' | 'Pages') for a given item.
+ * Uses the NEW schema category via normalization so legacy Firestore docs are routed correctly.
  */
 function resolveItemListKey(item) {
-  const confirmedType = (item?.confirmed_type || item?.confirmedType || '').trim();
-  if (confirmedType === 'Image') return 'Img';
-  if (confirmedType === 'Video') return 'Video';
-  const category = (item?.category || '').trim();
-  if (category === 'Mail') return 'Mail';
+  const { category } = normalizeItemCategoryAndType(item);
+  if (category === 'Image') return 'Img';
+  if (category === 'SNS')   return 'SNS';
+  if (category === 'Mail')  return 'Mail';
+  // Page and anything else → Pages (default)
   return 'Pages';
 }
 
@@ -279,7 +307,7 @@ function insertTimelineDividers(listEl, items) {
  */
 function getCategoryList(category) {
   const cat = (category || '').trim();
-  const known = ['Img', 'Video', 'Mail', 'Pages'];
+  const known = ['Img', 'SNS', 'Mail', 'Pages'];
   if (!known.includes(cat)) return null;
   return document.querySelector(`.sp-category-list[data-category-list="${cat}"]`);
 }
@@ -594,8 +622,10 @@ function createDataCard(item) {
   const imgUrlMethod = String(item.img_url_method || '');
   const directoryId  = item.directoryId && item.directoryId !== 'undefined' ? item.directoryId : '';
 
-  // All Page-category cards use the portrait layout.
-  const usePortraitExtractedLayout = (item.category || '').trim() === 'Page';
+  // Horizontal layout is used for Page-category items (new schema: 'Page';
+  // also legacy 'Contents'+'Video' which normalizes to 'Page').
+  const { category: normalizedCategoryForLayout } = normalizeItemCategoryAndType(item);
+  const usePortraitExtractedLayout = normalizedCategoryForLayout === 'Page';
 
   // ── Mail card: full-width layout with favicon + sender + title ───────────
   const isMail = (item.category || '').trim() === 'Mail';
@@ -702,8 +732,13 @@ function createDataCard(item) {
         <div class="data-card-context">
           ${(() => {
             const esc = (s) => String(s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-            const confirmedType = (item.confirmed_type || item.confirmedType || '').trim();
-            const isContentCard = confirmedType === 'Image' || confirmedType === 'Video';
+            const normalizedForContent = normalizeItemCategoryAndType(item);
+            // A "content card" shows platform name instead of URL in the header.
+            // This applies to: new-schema Image category, SNS+contents (media-rich SNS posts),
+            // and legacy Contents+Image/Video items (which map to Image/Page respectively).
+            const isContentCard =
+              normalizedForContent.category === 'Image' ||
+              (normalizedForContent.category === 'SNS' && normalizedForContent.confirmedType === 'contents');
             if (isContentCard) {
               const plat = (item.platform || '').trim();
               if (!plat) return '';
@@ -753,15 +788,37 @@ function createCardElement(item, isNew = false) {
 
   const container = document.createElement('div');
   container.className = 'card-container';
-  const confirmedType = (item.confirmed_type || item.confirmedType || '').trim();
-  const category = (item.category || '').trim();
-  if (confirmedType === 'Image') container.classList.add('image_card');
-  else if (confirmedType === 'Video') container.classList.add('video_card');
-  else if (category === 'Mail') container.classList.add('mail_card');
-  else container.classList.add('pages_card');
+  // Use normalized category AND confirmedType so that SNS items split between
+  // grid-style (contents, has dominant media) and full-width (post, text-only).
+  const {
+    category: normalizedContainerCategory,
+    confirmedType: normalizedContainerConfirmedType,
+  } = normalizeItemCategoryAndType(item);
 
-  // All Page-category cards get the portrait_extracted_card class.
-  if (category === 'Page') container.classList.add('portrait_extracted_card');
+  // Image category → grid (image_card).
+  // SNS + contents → grid (image_card), same as Image.
+  // SNS + post → full-width (pages_card), same as Page.
+  // Mail → full-width mail_card.
+  // Page / anything else → pages_card (default).
+  if (normalizedContainerCategory === 'Image') {
+    container.classList.add('image_card');
+  } else if (normalizedContainerCategory === 'SNS') {
+    if (normalizedContainerConfirmedType === 'contents') {
+      container.classList.add('image_card');
+    } else {
+      container.classList.add('pages_card');
+    }
+  } else if (normalizedContainerCategory === 'Mail') {
+    container.classList.add('mail_card');
+  } else {
+    container.classList.add('pages_card');
+  }
+
+  // Page-category items use the horizontal portrait layout.
+  // SNS items (both contents and post) do NOT use portrait layout.
+  if (normalizedContainerCategory === 'Page') {
+    container.classList.add('portrait_extracted_card');
+  }
 
   if (isNew) {
     container.style.height   = '0px';

@@ -1,0 +1,8 @@
+{
+  "name": "kickclip-scripts",
+  "private": true,
+  "description": "Root-level dev dependencies for migration/maintenance scripts",
+  "devDependencies": {
+    "firebase-admin": "^13.6.0"
+  }
+}

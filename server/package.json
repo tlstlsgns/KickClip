@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "GOOGLE_APPLICATION_CREDENTIALS=./service-account.json tsx watch src/server.ts"
+    "dev": "GOOGLE_APPLICATION_CREDENTIALS=./service-account-dev.json tsx watch src/server.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",

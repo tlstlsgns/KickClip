@@ -72,7 +72,7 @@ node_modules/
 **/firebase-service-account.json
 server/config/firebase-service-account.json
 
-service-account.json
+service-account*.json
 
 # === Chrome Extension signing keys (CRITICAL - never commit) ===
 browser-extension/keys/

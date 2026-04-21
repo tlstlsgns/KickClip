@@ -2045,6 +2045,67 @@ export async function resolveTypeACoreItem(itemMapElement, hoveredTarget = null,
   }
 }
 
+/**
+ * Parse a URL string and return the YouTube video shortcode if and only if
+ * the URL is a recognized YouTube video or Shorts URL. Returns null otherwise.
+ *
+ * Handles:
+ *   - https://www.youtube.com/watch?v={11-char-id}
+ *   - https://youtube.com/watch?v={11-char-id}
+ *   - https://m.youtube.com/watch?v={11-char-id}
+ *   - https://music.youtube.com/watch?v={11-char-id}
+ *   - https://www.youtube.com/shorts/{11-char-id}
+ *   - https://www.youtube.com/embed/{11-char-id}
+ *   - https://youtu.be/{11-char-id}
+ *
+ * The 11-character shortcode must match /^[a-zA-Z0-9_-]{11}$/.
+ */
+export function extractYouTubeShortcodeFromUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    const path = u.pathname;
+    const shortcodeRegex = /^[a-zA-Z0-9_-]{11}$/;
+
+    // youtu.be/{id}[/...]
+    if (host === 'youtu.be') {
+      const m = path.match(/^\/([a-zA-Z0-9_-]{11})(?:\/|$)/);
+      return m ? m[1] : null;
+    }
+
+    // youtube.com family
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'music.youtube.com') {
+      if (path === '/watch') {
+        const v = u.searchParams.get('v');
+        return v && shortcodeRegex.test(v) ? v : null;
+      }
+      const shortsMatch = path.match(/^\/shorts\/([a-zA-Z0-9_-]{11})(?:\/|$)/);
+      if (shortsMatch) return shortsMatch[1];
+      const embedMatch = path.match(/^\/embed\/([a-zA-Z0-9_-]{11})(?:\/|$)/);
+      if (embedMatch) return embedMatch[1];
+    }
+
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Build the canonical YouTube thumbnail URL for a shortcode.
+ * Returns hqdefault.jpg (480×360, 4:3) which YouTube guarantees exists for
+ * every public video. We intentionally avoid maxresdefault.jpg because it
+ * is not generated for every video and YouTube's 404 response serves a
+ * valid 120×90 JPEG body — which silently renders as a tiny gray image
+ * that cannot be detected via img.onerror in the browser.
+ */
+export function getYouTubeThumbnailUrl(shortcode) {
+  if (!shortcode || typeof shortcode !== 'string') return '';
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(shortcode)) return '';
+  return `https://img.youtube.com/vi/${shortcode}/hqdefault.jpg`;
+}
+
 export const SUPPORTED_PLATFORMS = {
   INSTAGRAM: 'INSTAGRAM',
   LINKEDIN: 'LINKEDIN',
@@ -3077,6 +3138,7 @@ function _getCategoryBaseDomain(url) {
 
 export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
   try {
+    const fullUrlString = String(savedUrl || '').trim();
     const u = new URL(savedUrl);
     const host = u.hostname.toLowerCase();
     const path = u.pathname.toLowerCase();
@@ -3177,7 +3239,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
 
     // ── Step 1: SNS ───────────────────────────────────────────────────────────
     // Detect SNS platform first (before any media check).
-    // Then run Dominant media check to set confirmedType within SNS.
+    // Then classify as `contents` (dominant media present) or `post` (no dominant media).
     let snsPlatform = '';
     if (host.includes('instagram.com')) {
       snsPlatform = 'Instagram';
@@ -3199,25 +3261,14 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
     }
 
     if (snsPlatform) {
+      // Dominant media check: 'Image' | 'Video' | '' — both Image and Video count as "contents".
       const dominantType = getDominantMediaType();
-      if (dominantType) {
-        return { category: 'SNS', platform: snsPlatform, confirmedType: dominantType };
-      }
-      let snsConfirmedType = 'Page';
-      if (snsPlatform === 'LinkedIn' || snsPlatform === 'Facebook') {
-        snsConfirmedType = 'Post';
-      } else if (snsPlatform === 'Instagram') {
-        if (path.includes('/p/') || path.includes('/reel/')) snsConfirmedType = 'Post';
-      } else if (snsPlatform === 'X') {
-        if (path.includes('/status/')) snsConfirmedType = 'Post';
-      } else if (snsPlatform === 'Threads') {
-        if (path.includes('/post/')) snsConfirmedType = 'Post';
-      } else if (snsPlatform === 'TikTok') {
-        if (path.includes('/video/')) snsConfirmedType = 'Post';
-      } else if (snsPlatform === 'Reddit') {
-        if (path.includes('/comments/')) snsConfirmedType = 'Post';
-      }
-      return { category: 'SNS', platform: snsPlatform, confirmedType: snsConfirmedType };
+      const hasDominantMedia = dominantType === 'Image' || dominantType === 'Video';
+      return {
+        category: 'SNS',
+        platform: snsPlatform,
+        confirmedType: hasDominantMedia ? 'contents' : 'post',
+      };
     }
 
     // ── Step 2: Mail ──────────────────────────────────────────────────────────
@@ -3265,69 +3316,63 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       return { category: 'Mail', platform: mailPlatform, confirmedType: '' };
     }
 
-    // ── Step 2.5: Unconditional Video hosts ───────────────────────────────────
+    // ── Step 2.5: Unconditional Video hosts → Page ────────────────────────────
+    // YouTube videos/shorts, Vimeo, Twitch URLs are always Page category. This
+    // check runs BEFORE the dominant media check (Step 3) because these pages
+    // often contain a dominant <video> element or large thumbnail image, which
+    // would otherwise cause Step 3 to classify them as Image.
+    //
+    // Note: Video is no longer a distinct category in the new taxonomy — these
+    // URLs classify as plain Page (with img_url handling done separately for
+    // YouTube thumbnails by coreEntry.js).
     if (
-      (host.includes('youtube.com') && (path.includes('/watch') || path.includes('/shorts/'))) ||
-      host.includes('youtu.be') ||
+      !!extractYouTubeShortcodeFromUrl(fullUrlString) ||
       host.includes('vimeo.com') ||
       host.includes('twitch.tv')
     ) {
-      return { category: 'Contents', platform: getSavedDomain(), confirmedType: 'Video' };
+      return { category: 'Page', platform: getSavedDomain(), confirmedType: '' };
     }
 
     // ── Step 3: Dominant media check (non-SNS) ────────────────────────────────
-    // Skip dominant media check when pageUrl is a search engine non-search page
-    // (e.g. google.com homepage) — items there are ads/products, not real Contents.
+    // Only DOMINANT IMAGE classifies as Image category.
+    // Dominant Video falls through to default (Page) — Video is no longer a distinct category.
+    // Skip check when pageUrl is a search engine non-search page (items are ads, not real content).
     const dominantType = isSearchEngineNonSearchPage() ? '' : getDominantMediaType();
-    if (dominantType) {
-      if (dominantType === 'Video') {
-        return { category: 'Contents', platform: getSavedDomain(), confirmedType: 'Video' };
-      }
-      return { category: 'Contents', platform: getPageDomain(), confirmedType: 'Image' };
+    if (dominantType === 'Image') {
+      return { category: 'Image', platform: getPageDomain(), confirmedType: '' };
     }
 
     // ── Step 4: Same-origin URL-based ─────────────────────────────────────────
+    // Only image file extensions classify as Image. Video extensions and video-host URLs
+    // fall through to default (Page).
     const savedDomain = getSavedDomain();
     const pageDomain  = pageUrl ? _getCategoryBaseDomain(pageUrl) : '';
     const sameOrigin  = !!savedDomain && !!pageDomain && savedDomain === pageDomain;
 
     if (sameOrigin) {
-      if (/\.(jpg|jpeg|png|gif|webp|svg)$/i.test(path))
-        return { category: 'Contents', platform: getPageDomain(), confirmedType: 'Image' };
-      if (/\.(mp4|webm)$/i.test(path))
-        return { category: 'Contents', platform: savedDomain, confirmedType: 'Video' };
-      if (
-        (host.includes('youtube.com') && (path.includes('/watch') || path.includes('/shorts/'))) ||
-        host.includes('youtu.be') ||
-        host.includes('vimeo.com') ||
-        host.includes('twitch.tv')
-      ) return { category: 'Contents', platform: savedDomain, confirmedType: 'Video' };
+      if (/\.(jpg|jpeg|png|gif|webp|svg)$/i.test(path)) {
+        return { category: 'Image', platform: getPageDomain(), confirmedType: '' };
+      }
     }
 
     // ── Step 5: Weighted scoring ──────────────────────────────────────────────
-    // Skip scoring-based Contents classification on search engine non-search pages.
+    // Only scores toward IMAGE classification. Video signals are ignored.
+    // A page reaches Image only when there is a clear, single image focus.
     if (!isSearchEngineNonSearchPage()) {
       let score = 0;
       const mediaRatio = Number(htmlContext?.mediaRatio) || 0;
       if (mediaRatio > 0.7) score += 70;
       else if (mediaRatio > 0.5) score += 40;
-      const videoCount = Number(htmlContext?.videoCount) || 0;
-      if (videoCount > 0) score += 50;
       const imageCount = Number(htmlContext?.imageCount) || 0;
+      const videoCount = Number(htmlContext?.videoCount) || 0;
       if (imageCount + videoCount === 1) score += 30;
-      if (/\.(jpg|jpeg|png|gif|webp|svg|mp4|webm)$/i.test(path)) score += 20;
-      if (
-        (host.includes('youtube.com') && (path.includes('/watch') || path.includes('/shorts/'))) ||
-        host.includes('youtu.be') ||
-        host.includes('vimeo.com') ||
-        host.includes('twitch.tv')
-      ) score += 20;
+      if (/\.(jpg|jpeg|png|gif|webp|svg)$/i.test(path)) score += 20;
       if (imageCount + videoCount > 2) score -= 30;
-      if (score >= 100) {
-        if (videoCount > 0) {
-          return { category: 'Contents', platform: getSavedDomain(), confirmedType: 'Video' };
-        }
-        return { category: 'Contents', platform: getPageDomain(), confirmedType: 'Image' };
+      // Only Image category emerges from scoring. Presence of video does not help — scoring
+      // is biased toward still-image pages. Classification reaches Image only if
+      // videoCount === 0 AND score >= 100.
+      if (score >= 100 && videoCount === 0) {
+        return { category: 'Image', platform: getPageDomain(), confirmedType: '' };
       }
     }
 

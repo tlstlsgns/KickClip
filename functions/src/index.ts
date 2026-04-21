@@ -300,7 +300,7 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
   const clientIsPortraitRaw = typeof req.body.is_portrait === "boolean" ? req.body.is_portrait : false;
   const clientImgUrlMethodRaw =
     typeof req.body.img_url_method === "string" &&
-    ["screenshot", "extracted", "favicon"].includes(req.body.img_url_method) ?
+    ["screenshot", "extracted", "favicon", "youtube-thumbnail"].includes(req.body.img_url_method) ?
       (req.body.img_url_method as string) : "";
   const clientScreenshotPaddingRaw = typeof req.body.screenshot_padding === "number" ?
     req.body.screenshot_padding : 0;
