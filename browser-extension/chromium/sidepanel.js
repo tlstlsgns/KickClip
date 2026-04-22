@@ -1866,14 +1866,23 @@ function loadData() {
   itemsWithoutDirectory.forEach((item) => {
     const itemId = getItemId(item);
 
-    // Check if this real item matches an optimistic card by URL
-    // If so, promote the existing DOM in-place (avoid remove/recreate flash)
+    // Check if this real item matches an optimistic card.
+    // Priority 1: exact temp_id match (Firestore's temp_id field ↔ OptimisticCard's tempId).
+    //   This is precise and handles the case of multiple simultaneous saves of the same URL.
+    // Priority 2: URL-based fallback — only used when temp_id is missing (legacy Firestore
+    //   docs saved before temp_id support, or if temp_id was somehow lost in transit).
+    // If so, promote the existing DOM in-place (avoid remove/recreate flash).
     let matchedTempId = null;
     if (!isInitialRender) {
-      for (const [tempId, entry] of optimisticCards.entries()) {
-        if (entry.url === item.url) {
-          matchedTempId = tempId;
-          break;
+      const itemTempId = String(item.temp_id || '').trim();
+      if (itemTempId && optimisticCards.has(itemTempId)) {
+        matchedTempId = itemTempId;
+      } else {
+        for (const [tempId, entry] of optimisticCards.entries()) {
+          if (entry.url === item.url) {
+            matchedTempId = tempId;
+            break;
+          }
         }
       }
     }

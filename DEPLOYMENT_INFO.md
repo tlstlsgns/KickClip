@@ -1,7 +1,7 @@
 # KickClip Deployment & Recovery Info
 
-**Last updated:** 2026-04-21
-**Current stable commit:** `f8089a0` (Initial commit — Phase A complete)
+**Last updated:** 2026-04-21 (evening — new taxonomy migration)
+**Current stable commit:** `6df7b9f` (feat: migrate to new 4-category taxonomy)
 **Maintainer:** tlstlsgns
 **Contact:** [email protected]
 
@@ -27,7 +27,8 @@ KickClip operates in two parallel environments. Every environment has its own Fi
 | **Firebase Console** | https://console.firebase.google.com/project/saveurl-a8593 |
 | **GCP Project Number** | `658386350246` |
 | **Cloud Functions URL** | `https://api-gstf2hxbiq-du.a.run.app` |
-| **Default GCP resource location** | `us-central1` |
+| **Default GCP resource location** | `asia-northeast3` *(Seoul)* |
+| **Cloud Functions region** | `asia-northeast3` *(verified 2026-04-21 via deploy log)* |
 | **Storage bucket** | `saveurl-a8593.firebasestorage.app` |
 | **Authentication** | Enabled (Google provider) |
 | **Firestore** | Initialized |
@@ -40,7 +41,8 @@ KickClip operates in two parallel environments. Every environment has its own Fi
 | **Firebase Console** | https://console.firebase.google.com/project/saveurl-prod |
 | **GCP Project Number** | `108278020684` |
 | **Cloud Functions URL** | `https://api-hn4mxotviq-du.a.run.app` |
-| **Default GCP resource location** | `us-central1` |
+| **Default GCP resource location** | `asia-northeast3` *(Seoul)* |
+| **Cloud Functions region** | `asia-northeast3` *(deployed 2026-04-21)* |
 | **Storage bucket** | `saveurl-prod.firebasestorage.app` |
 | **Storage region** | `US-EAST1` *(set during Storage initialization — cannot be changed)* |
 | **Authentication** | Enabled (Google provider) |
@@ -169,11 +171,14 @@ These files exist in the working tree but are excluded from git. Each needs its 
 |---|---|---|
 | `browser-extension/keys/*.pem` | Extension signing keys | ✅ Bitwarden |
 | `server/.env` | Gemini API key, other server-side secrets | ⚠️ **NOT BACKED UP** (TODO) |
-| `server/service-account.json` | Firebase Admin credential (DEV) | ⚠️ **NOT BACKED UP** (TODO) |
+| `server/service-account-dev.json` | Firebase Admin credential (DEV project `saveurl-a8593`) | ✅ Bitwarden *(backed up 2026-04-21)* |
+| `server/service-account-prod.json` | Firebase Admin credential (PROD project `saveurl-prod`) — **newly generated 2026-04-21** | ✅ Bitwarden *(backed up 2026-04-21)* |
 | `client/.env` | Electron app environment variables | ⚠️ **NOT BACKED UP** (TODO) |
 | `functions/.env` | Cloud Functions environment *(does not exist as of 2026-04-21)* | N/A |
 
-> 📌 **TODO:** Extend Bitwarden backup to cover `server/.env`, `server/service-account.json`, `client/.env`. See Phase B / recovery backlog.
+> 📌 **TODO (remaining):** Extend Bitwarden backup to cover `server/.env` and `client/.env`. See Phase B / recovery backlog.
+>
+> 📌 **DONE 2026-04-21:** Bitwarden backup for DEV (`service-account-dev.json`, renamed from `service-account.json`) and PROD (`service-account-prod.json`, new key generated). `.gitignore` pattern updated from `service-account.json` to `service-account*.json` to cover both.
 
 ---
 
@@ -240,7 +245,17 @@ Copied from DEV to PROD verbatim. See Firebase Console for current content.
    - `chrome://extensions` → "Load unpacked" → select `browser-extension/chromium/`
    - Extension ID should be `knpcebcbpcjoiagccededjhamononapd` (matches DEV OAuth Client)
 6. **Sign in test:** If it fails, verify GCP OAuth Client's Application ID matches the loaded Extension ID.
-7. **Restore other env files (TODO — once backed up):** `server/.env`, `server/service-account.json`, `client/.env`.
+7. **Restore other env files:**
+   - `server/service-account-dev.json` — restore from Bitwarden (item: `KickClip - DEV Firebase Service Account Key`). `chmod 600`.
+   - `server/service-account-prod.json` — restore from Bitwarden (item: `KickClip - PROD Firebase Service Account Key`). `chmod 600`.
+   - `server/.env` — ⚠️ not yet backed up; retrieve from Gemini API key source (Google AI Studio) if needed.
+   - `client/.env` — ⚠️ not yet backed up; reference `client/.env.example` if exists.
+8. **If running migration scripts:**
+```bash
+   cd ~/Projects/KickClip
+   node scripts/migrate-schema.js --project=dev --dry-run
+```
+   Dry-run should show `To update: 0 items` on a schema-current database.
 
 ### Scenario B: `.pem` file accidentally deleted locally
 
@@ -278,8 +293,64 @@ Copied from DEV to PROD verbatim. See Firebase Console for current content.
 ---
 
 ## 🗓 Change Log
+- **2026-04-22** — Clipboard copy feature + OptimisticCard performance optimization + tempId end-to-end matching.
+  - **Sub-task 4 — Clipboard copy on save:**
+    - **Sub-task 4.1**: Added `clipboardWrite` permission to both `manifest.dev.json` and `manifest.prod.json`.
+    - **Sub-task 4.2**: Added 4 helpers in `coreEntry.js` — `getDominantImageElement`, `imgElementToBlob`, `showCopyToast`, and category-dispatch logic — invoked from both save paths (page save and CoreItem save) behind `window.self === window.top` guard.
+    - **Sub-task 4.3.1**: Fixed `ClipboardItem` to accept only `image/png` (Chrome rejects JPEG/WebP/others); all non-PNG MIME types now fall through to canvas re-encoding.
+    - **Sub-task 4.3.2**: Added `<all_urls>` to `host_permissions` in both manifests — enables background-script cross-origin image fetch.
+    - **Sub-task 4.3.3**: Added `fetch-image` message handler in `background.js` — fetches image URL via extension privileges (bypasses page CORS), returns base64 data URL via `FileReader`.
+    - **Sub-task 4.3.4**: Added Attempt 1.5 (background-script fetch) to `imgElementToBlob`, plus new `dataUrlToPngBlob` helper that re-encodes any image type to PNG via canvas. Order is now: direct fetch (PNG only) → background fetch → canvas-from-rendered-img as last resort.
+    - **Sub-task 4.4**: Moved Toast to top-center with brand purple background `rgba(188, 19, 254, 0.92)` (from `brandConfig.js` `KEY_COLOR_HEX: '#BC13FE'`).
+    - **Sub-task 4.5**: Replaced fire-and-forget clipboard copy with promise-based `performClipboardCopy` + `buildToastMessage` — unified Toast reflects both copy and save result. Save success is determined by `saveShutterStatus === 'success'` (existing shutter logic reused, no extra server round-trip). Toast CSS gained `white-space: pre-line` and `text-align: center` for multi-line messages. `handleClipboardCopy` fully removed.
+    - Toast message matrix: `Image copied & saved` / `{subject} copied\n(save failed)` / `{subject} saved\n(copy failed)` / `Failed`, with subject per category: `Image` / `confirmedType` (SNS, e.g. "contents"/"post") / `Mail URL` / `Page URL`.
+    - Image category's binary copy success does NOT fall back to URL — failure path returns `{ success: false }` so Toast accurately reflects state.
+  - **Sub-task 5 — OptimisticCard performance + precise matching:**
+    - **Sub-task 5.1 — Screenshot 2-stage split:** `capturePageScreenshotBase64()` kept as-is; added two new functions — `capturePageScreenshotRaw()` (Stage 1: UI hide + `waitForRepaint` + `chrome.tabs.captureVisibleTab`, returns raw dataUrl) and `processPageScreenshot(rawDataUrl)` (Stage 2: bg-color sampling + scrollbar crop). Save path A refactored so OptimisticCard dispatches immediately after Stage 1 with raw dataUrl as `imgUrl`, while Stage 2 runs in parallel with userId/fetch-metadata/etc. and is awaited just before payload construction. Save path B (CoreItem) unchanged (uses `extractImageFromCoreItem`).
+    - **Sub-task 5.2 — tempId end-to-end propagation:** `tempId` generation hoisted in both save paths to precede both optimistic-card dispatch AND payload construction. Payload now includes `...(tempId ? { temp_id: tempId } : {})`. Server (`functions/src/index.ts`) validates `clientTempIdRaw = typeof req.body.temp_id === "string" ? req.body.temp_id.trim() : ""` and conditionally writes `firestoreEntry.temp_id`. Cloud Functions redeployed to both DEV (`saveurl-a8593`) and PROD (`saveurl-prod`) in `asia-northeast3`. Backward compatible — absent `temp_id` behaves exactly as before.
+    - **Sub-task 5.3 — Precise tempId-based matching:** `sidepanel.js` item-to-optimistic-card matching now uses Priority 1 (exact `item.temp_id` match via `optimisticCards.has(tempId)`) with Priority 2 (URL-based iteration) as fallback for legacy Firestore docs without `temp_id`. DOM in-place promotion logic unchanged — the change is isolated to a single ~15-line matching block.
+    - Resolves ambiguity when the same URL is saved multiple times in quick succession.
+    - Existing in-place DOM promotion behavior preserved — OptimisticCard element continues to exist and is updated (dataset fields) rather than replaced, avoiding flash/flicker.
+- **2026-04-21 (evening)** — Taxonomy overhaul + YouTube thumbnail feature + data migration.
+  - **Sub-task 1 — Unified Video card layout** with Page card layout (horizontal "portrait extracted" style).
+  - **Sub-task 2 — YouTube thumbnail extraction:**
+    - `extractYouTubeShortcodeFromUrl()` strictly parses YouTube video/shorts URLs.
+    - `getYouTubeThumbnailUrl()` builds `img.youtube.com/vi/{id}/hqdefault.jpg` URL.
+    - `hqdefault.jpg` chosen over `maxresdefault.jpg` because the latter returns a valid 120×90 gray placeholder on 404 (undetectable via `img.onerror`).
+    - `coreEntry.js` injects thumbnail as `img_url` with `img_url_method: 'youtube-thumbnail'`; screenshot capture skipped for YouTube saves.
+    - Server allowlist (`functions/src/index.ts`) extended to accept `'youtube-thumbnail'` method value.
+    - Cloud Functions redeployed to both DEV and PROD (`asia-northeast3`).
+    - `host_permissions` on both manifests extended with 5 YouTube domains.
+  - **Sub-task 3 — New 4-category taxonomy:**
+    - Categories: `{SNS, Contents, Mail, Page}` → `{SNS, Image, Mail, Page}`.
+    - `Contents` split: images → `Image`; videos/other → `Page` (Video category removed entirely).
+    - SNS `confirmed_type`: `{Image, Video, Post, Page}` → `{contents, post}` (lowercase).
+    - Image/Mail/Page `confirmed_type`: always `""`.
+    - `detectItemCategory` rewritten to produce new taxonomy. Step 2.5 "Unconditional Video hosts" restored after 3.1 regression — YouTube/Vimeo/Twitch URLs return `Page` before dominant-media check.
+    - `sidepanel.js` gained `normalizeItemCategoryAndType()` for render-time back-compat with legacy Firestore docs.
+    - Sidepanel tab UI: `Img / Video / Mail / Pages` → `Img / SNS / Mail / Pages`.
+    - SNS cards split by `confirmed_type`: `contents` → grid (`image_card`), `post` → full-width (`pages_card`).
+    - `.data-card` height: `80px` → `130px` for `image_card` container (taller thumbnail in grid layout).
+  - **Sub-task 3.4 — Firestore data migration:**
+    - Script: `scripts/migrate-schema.js` — uses `listDocuments()` to include virtual parent user documents.
+    - DEV (`saveurl-a8593`): 97 items scanned, all successfully on new schema post-migration.
+    - PROD (`saveurl-prod`): 42 items scanned, 23 migrated from legacy schema, 19 already new.
+    - Legacy fields untouched except `category` and `confirmed_type` — `img_url`, `img_url_method`, `createdAt`, etc. preserved.
+  - **Infrastructure:**
+    - `firebase-admin` installed as root-level devDependency (for migration scripts).
+    - Root `package.json` formalized as `kickclip-scripts` (private, for maintenance scripts only).
+    - `server/service-account.json` renamed to `server/service-account-dev.json` for disambiguation.
+    - New PROD service account key generated → `server/service-account-prod.json`.
+    - `.gitignore` pattern updated `service-account.json` → `service-account*.json` to cover both files.
+    - `server/package.json` `dev` script updated to reference new DEV key filename.
+    - Bitwarden backups added for both DEV and PROD service account keys.
+  - **PROD release:**
+    - New `dist/kickclip-prod.zip` rebuilt (324.98 KB, 23 files).
+    - Verified: PROD public key + PROD OAuth client_id + YouTube host_permissions all present.
+    - **Existing customers must reinstall** — old zip does not understand new schema.
+  - Commit: `6df7b9f`
 
-- **2026-04-21** — Initial version. Captures state after Phase A (DEV/PROD build separation) completion.
+- **2026-04-21 (morning)** — Initial version. Captures state after Phase A (DEV/PROD build separation) completion.
   - Git repository initialized and pushed to GitHub private repo `tlstlsgns/KickClip`.
   - `.pem` keys backed up to Bitwarden.
   - Commit: `f8089a0`

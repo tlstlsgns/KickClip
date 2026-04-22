@@ -19,6 +19,7 @@
     "windows",
     "sidePanel",
     "identity",
+    "clipboardWrite",
     "cookies"
   ],
   "host_permissions": [
@@ -37,17 +38,24 @@
     "https://youtube.com/*",
     "https://m.youtube.com/*",
     "https://youtu.be/*",
-    "https://img.youtube.com/*"
+    "https://img.youtube.com/*",
+    "<all_urls>"
   ],
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "<all_urls>"
+      ],
       "exclude_matches": [
         "https://claude.ai/*",
         "https://chatgpt.com/*",
         "https://gemini.google.com/*"
       ],
-      "js": ["config.js", "html2canvas.bundle.js", "content-loader.js"],
+      "js": [
+        "config.js",
+        "html2canvas.bundle.js",
+        "content-loader.js"
+      ],
       "all_frames": true,
       "run_at": "document_start"
     }
@@ -78,7 +86,9 @@
         "sidepanel.css",
         "firebase-bundle.js"
       ],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "commands": {
@@ -95,7 +105,12 @@
   },
   "oauth2": {
     "client_id": "658386350246-kinolt4jf9l7131r76rnbii0407ookcj.apps.googleusercontent.com",
-    "scopes": ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.readonly"]
+    "scopes": [
+      "openid",
+      "email",
+      "profile",
+      "https://www.googleapis.com/auth/gmail.readonly"
+    ]
   },
   "action": {
     "default_title": "KickClip",

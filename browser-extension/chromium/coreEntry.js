@@ -603,6 +603,158 @@ async function capturePageScreenshotBase64() {
   }
 }
 
+/**
+ * Stage 1: raw screenshot capture only. Hides KickClip UI, waits for repaint,
+ * and invokes chrome.tabs.captureVisibleTab via background. Returns the raw
+ * dataUrl WITHOUT bg-color sampling or scrollbar cropping.
+ *
+ * This allows the calling code to show the Optimistic Card with the screenshot
+ * as soon as the raw capture completes, then run the post-processing (Stage 2)
+ * in parallel with other async work.
+ *
+ * Returns: { rawDataUrl: string } | null
+ */
+async function capturePageScreenshotRaw() {
+  const KC_UI_IDS = [
+    'blink-highlight-overlay',
+    'blink-metadata-tooltip',
+    'blink-green-candidate-layer',
+    'blink-fullpage-highlight-overlay',
+  ];
+
+  // Temporarily hide KickClip UI elements
+  const hiddenEls = [];
+  for (const id of KC_UI_IDS) {
+    try {
+      const el = document.getElementById(id);
+      if (el && el.style.display !== 'none') {
+        hiddenEls.push({ el, prevOpacity: el.style.opacity, prevTransition: el.style.transition });
+        el.style.transition = '';
+        el.style.opacity = '0';
+      }
+    } catch (e) {}
+  }
+
+  _isCapturing = true;
+  try {
+    // Wait for the browser to repaint with hidden KickClip UI before capturing.
+    await waitForRepaint();
+    await new Promise((resolve) => setTimeout(resolve, 32));
+
+    const result = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action: 'capture-visible-tab' }, (response) => {
+          if (chrome.runtime.lastError) {
+            resolve(null);
+            return;
+          }
+          resolve(response);
+        });
+      } catch (e) {
+        resolve(null);
+      }
+    });
+
+    if (!result?.success || !result?.dataUrl) return null;
+    return { rawDataUrl: result.dataUrl };
+  } finally {
+    _isCapturing = false;
+    // Always restore KickClip UI elements
+    for (const { el, prevOpacity, prevTransition } of hiddenEls) {
+      try {
+        el.style.transition = prevTransition;
+        el.style.opacity    = prevOpacity;
+      } catch (e) {}
+    }
+    try {
+      const currentActive = state.activeCoreItem;
+      if (currentActive && currentActive.nodeType === 1) {
+        showCoreHighlight(
+          currentActive,
+          checkIsSavedSync(
+            String(state.lastExtractedMetadata?.activeHoverUrl || state.activeHoverUrl || '')
+          )
+        );
+      }
+    } catch (e) {}
+  }
+}
+
+/**
+ * Stage 2: post-process a raw screenshot dataUrl:
+ *   - sample background color from 3 corners
+ *   - crop out scrollbars if present
+ * Returns: { dataUrl, backgroundColor }
+ */
+async function processPageScreenshot(rawDataUrl) {
+  if (!rawDataUrl) return null;
+
+  const dpr = window.devicePixelRatio || 1;
+
+  // Sample background color from 3 corners of the captured full-page image.
+  let backgroundColor = '#ffffff';
+  try {
+    const fullImg = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('img load failed'));
+      image.src = rawDataUrl;
+    });
+    const sampleCanvas = document.createElement('canvas');
+    sampleCanvas.width  = fullImg.naturalWidth  || fullImg.width;
+    sampleCanvas.height = fullImg.naturalHeight || fullImg.height;
+    const sCtx = sampleCanvas.getContext('2d');
+    if (sCtx) {
+      sCtx.drawImage(fullImg, 0, 0);
+      const cw = sampleCanvas.width;
+      const ch = sampleCanvas.height;
+      const samples = [
+        sCtx.getImageData(0, 0, 1, 1).data,
+        sCtx.getImageData(cw - 1, 0, 1, 1).data,
+        sCtx.getImageData(0, ch - 1, 1, 1).data,
+      ];
+      const avgR = Math.round(samples.reduce((s, p) => s + p[0], 0) / samples.length);
+      const avgG = Math.round(samples.reduce((s, p) => s + p[1], 0) / samples.length);
+      const avgB = Math.round(samples.reduce((s, p) => s + p[2], 0) / samples.length);
+      backgroundColor = `rgb(${avgR},${avgG},${avgB})`;
+    }
+  } catch (_) {
+    backgroundColor = '#ffffff';
+  }
+
+  // Crop out scrollbars if present.
+  const scrollbarX = Math.max(0, Math.round((window.innerWidth  - document.documentElement.clientWidth)  * dpr));
+  const scrollbarY = Math.max(0, Math.round((window.innerHeight - document.documentElement.clientHeight) * dpr));
+
+  if (scrollbarX > 0 || scrollbarY > 0) {
+    try {
+      const fullImg = await new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload  = () => resolve(image);
+        image.onerror = () => reject(new Error('img load failed'));
+        image.src = rawDataUrl;
+      });
+      const cropW = (fullImg.naturalWidth  || fullImg.width)  - scrollbarX;
+      const cropH = (fullImg.naturalHeight || fullImg.height) - scrollbarY;
+      if (cropW > 0 && cropH > 0) {
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width  = cropW;
+        cropCanvas.height = cropH;
+        const cropCtx = cropCanvas.getContext('2d');
+        if (cropCtx) {
+          cropCtx.drawImage(fullImg, 0, 0);
+          const croppedDataUrl = cropCanvas.toDataURL('image/jpeg', 0.8);
+          return { dataUrl: croppedDataUrl, backgroundColor };
+        }
+      }
+    } catch (_) {
+      // Crop failed — fall back to original
+    }
+  }
+
+  return { dataUrl: rawDataUrl, backgroundColor };
+}
+
 function withInstagramActiveHoverUrl(meta = {}, coreItem = null, cachedExtraction = null) {
   const platform = String(meta?.platform || '').toUpperCase();
   if (platform !== 'INSTAGRAM') return meta;
@@ -1632,19 +1784,22 @@ async function saveActiveCoreItem(request = {}) {
       const youtubeThumbnailUrl = youtubeShortcode ? getYouTubeThumbnailUrl(youtubeShortcode) : '';
       const isYouTubeSave = !!youtubeThumbnailUrl;
 
-      let pageScreenshotBase64 = null;
-      let pageScreenshotBgColor = null;
+      // Stage 1: raw screenshot capture (non-YouTube only) — blocking just for
+      // the chrome.tabs.captureVisibleTab call, not for post-processing.
+      let rawScreenshotDataUrl = null;
       if (!isYouTubeSave) {
-        // capturePageScreenshotBase64 handles waitForRepaint + 32ms internally
-        const pageScreenshotResult = await capturePageScreenshotBase64();
-        if (pageScreenshotResult) {
-          pageScreenshotBase64 = pageScreenshotResult.dataUrl;
-          pageScreenshotBgColor = pageScreenshotResult.backgroundColor;
+        const rawResult = await capturePageScreenshotRaw();
+        if (rawResult?.rawDataUrl) {
+          rawScreenshotDataUrl = rawResult.rawDataUrl;
         }
-      } else {
-        pageScreenshotBase64 = null;
-        pageScreenshotBgColor = null;
       }
+
+      // Stage 2: post-process the raw screenshot (bg color + crop) in parallel
+      // with other async work (userId, fetch-metadata, etc.). Await result at
+      // payload construction time.
+      const screenshotProcessPromise = rawScreenshotDataUrl
+        ? processPageScreenshot(rawScreenshotDataUrl)
+        : Promise.resolve(null);
 
       // Request userId from background.js (cached from sidepanel sign-in)
       let userId = null;
@@ -1717,42 +1872,34 @@ async function saveActiveCoreItem(request = {}) {
           }
         } catch (e) {}
       }
-      const payload = {
-        url,
-        title: title || url,
-        timestamp: Date.now(),
-        saved_by: 'browser-extension',
-        userLanguage: navigator.language || 'en',
-        page_save: true,
-        ...(pageScreenshotBase64 ? { screenshot_base64: pageScreenshotBase64 } : {}),
-        ...(pageScreenshotBgColor ? { screenshot_bg_color: pageScreenshotBgColor } : {}),
-        ...(pageCategory      ? { category:       pageCategory }      : {}),
-        ...(pagePlatform      ? { platform:        pagePlatform }      : {}),
-        ...(pageConfirmedType ? { confirmed_type:  pageConfirmedType } : {}),
-        ...(pageSender        ? { sender:          pageSender }        : {}),
-        ...(pageCategory === 'Page' ? { page_description: pageDescription } : {}),
-        is_portrait: !isYouTubeSave && pageCategory === 'Page' && !!pageScreenshotBase64,
-        img_url_method: isYouTubeSave ? 'youtube-thumbnail' : 'screenshot',
-        ...(isYouTubeSave ? { img_url: youtubeThumbnailUrl } : {}),
-        ...(userId ? { userId } : {}),
-        ...(gmailToken ? { gmail_token: gmailToken } : {}),
-        ...(naverCookies ? { naver_cookies: naverCookies } : {}),
-      };
+      // Clipboard copy: start async copy without blocking. Result is combined
+      // with save result (from saveShutterStatus) after triggerShutterEffect
+      // to produce a single unified Toast.
+      const pageClipboardPromise = (window.self === window.top)
+        ? performClipboardCopy(pageCategory || '', url, document.body)
+        : Promise.resolve({ success: false });
+
+      // Generate tempId for end-to-end matching: Optimistic Card ↔ Firestore doc
+      // Only generated in top-level frame (iframes skip Optimistic Card dispatch).
+      const tempId = window.self === window.top
+        ? `temp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+        : '';
 
       // Optimistic UI: notify Side Panel to show a temporary card immediately
       // Skip if running inside an iframe — only the top-level frame should create optimistic cards
+      // Uses raw screenshot dataUrl (Stage 1) — Stage 2 post-processing runs in parallel
+      // and is used for the final payload to server.
       if (window.self === window.top) {
-        const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
         try {
           chrome.runtime.sendMessage({
             action:             'optimistic-card',
             tempId,
             url,
             title:              title || url,
-            imgUrl:             isYouTubeSave ? youtubeThumbnailUrl : (pageScreenshotBase64 || ''),
-            isScreenshot:       !isYouTubeSave && !!pageScreenshotBase64,
+            imgUrl:             isYouTubeSave ? youtubeThumbnailUrl : (rawScreenshotDataUrl || ''),
+            isScreenshot:       !isYouTubeSave && !!rawScreenshotDataUrl,
             screenshotPadding:  0,
-            screenshotBgColor:  pageScreenshotBgColor || '',
+            screenshotBgColor:  '',
             category:           pageCategory || '',
             platform:           pagePlatform || '',
             confirmedType:      pageConfirmedType || '',
@@ -1773,9 +1920,56 @@ async function saveActiveCoreItem(request = {}) {
 
       triggerShutterEffect('page', saveShutterStatus);
 
+      // Combined Toast: show after shutter effect fires, using shutter status
+      // as the save-success indicator (per intended design).
+      if (window.self === window.top) {
+        (async () => {
+          try {
+            const clipboardResult = await pageClipboardPromise;
+            const saveSuccess = saveShutterStatus === 'success';
+            const message = buildToastMessage(
+              pageCategory || '',
+              pageConfirmedType || '',
+              !!clipboardResult?.success,
+              saveSuccess
+            );
+            showCopyToast(message);
+          } catch (_) { /* silent */ }
+        })();
+      }
+
       if (pageOverlayEl) { pageOverlayEl.style.transition = ''; pageOverlayEl.style.opacity = '1'; }
       if (pageBadgeEl)   { pageBadgeEl.style.transition = '';   pageBadgeEl.style.opacity = ''; }
       resetFullPageHideTimer();
+
+      // Await Stage 2 post-processing result — started in parallel earlier.
+      // By now, it has likely completed while userId/fetch-metadata/etc. ran.
+      const processedScreenshot = await screenshotProcessPromise;
+      const pageScreenshotBase64 = processedScreenshot?.dataUrl || null;
+      const pageScreenshotBgColor = processedScreenshot?.backgroundColor || null;
+
+      const payload = {
+        url,
+        title: title || url,
+        timestamp: Date.now(),
+        saved_by: 'browser-extension',
+        userLanguage: navigator.language || 'en',
+        page_save: true,
+        ...(tempId ? { temp_id: tempId } : {}),
+        ...(pageScreenshotBase64 ? { screenshot_base64: pageScreenshotBase64 } : {}),
+        ...(pageScreenshotBgColor ? { screenshot_bg_color: pageScreenshotBgColor } : {}),
+        ...(pageCategory      ? { category:       pageCategory }      : {}),
+        ...(pagePlatform      ? { platform:        pagePlatform }      : {}),
+        ...(pageConfirmedType ? { confirmed_type:  pageConfirmedType } : {}),
+        ...(pageSender        ? { sender:          pageSender }        : {}),
+        ...(pageCategory === 'Page' ? { page_description: pageDescription } : {}),
+        is_portrait: !isYouTubeSave && pageCategory === 'Page' && !!pageScreenshotBase64,
+        img_url_method: isYouTubeSave ? 'youtube-thumbnail' : 'screenshot',
+        ...(isYouTubeSave ? { img_url: youtubeThumbnailUrl } : {}),
+        ...(userId ? { userId } : {}),
+        ...(gmailToken ? { gmail_token: gmailToken } : {}),
+        ...(naverCookies ? { naver_cookies: naverCookies } : {}),
+      };
 
       const response = await fetch(`${KC_SERVER_URL}/api/v1/save-url`, {
         method: 'POST',
@@ -1932,6 +2126,24 @@ async function saveActiveCoreItem(request = {}) {
       }
     })();
 
+    // Clipboard copy: start async copy without blocking. Result is combined
+    // with save result (from saveShutterStatus) after triggerShutterEffect
+    // to produce a single unified Toast.
+    const coreClipboardCategory = String(meta?.category || '').trim();
+    const coreClipboardPromise = (window.self === window.top)
+      ? performClipboardCopy(
+          coreClipboardCategory,
+          url,
+          activeItem instanceof Element ? activeItem : document.body
+        )
+      : Promise.resolve({ success: false });
+
+    // Generate tempId for end-to-end matching: Optimistic Card ↔ Firestore doc
+    // Only generated in top-level frame (iframes skip Optimistic Card dispatch).
+    const tempId = window.self === window.top
+      ? `temp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+      : '';
+
     // Immediately update _savedUrlSet before shutter so checkIsSavedSync() returns true
     // even if saved-urls-updated arrives before fetch completes.
     try {
@@ -1940,6 +2152,24 @@ async function saveActiveCoreItem(request = {}) {
     } catch (e) {}
 
     triggerShutterEffect('core', saveShutterStatus);
+
+    // Combined Toast: show after shutter effect fires, using shutter status
+    // as the save-success indicator (per intended design).
+    if (window.self === window.top) {
+      (async () => {
+        try {
+          const clipboardResult = await coreClipboardPromise;
+          const saveSuccess = saveShutterStatus === 'success';
+          const message = buildToastMessage(
+            coreClipboardCategory,
+            String(meta?.confirmedType || '').trim(),
+            !!clipboardResult?.success,
+            saveSuccess
+          );
+          showCopyToast(message);
+        } catch (_) { /* silent */ }
+      })();
+    }
 
     if (coreOverlayEl) { coreOverlayEl.style.transition = ''; coreOverlayEl.style.opacity = '1'; }
     if (coreBadgeEl)   { coreBadgeEl.style.transition = '';   coreBadgeEl.style.opacity = ''; }
@@ -2019,6 +2249,7 @@ async function saveActiveCoreItem(request = {}) {
       saved_by: 'browser-extension',
       userLanguage: navigator.language || 'en',
       pageUrl: meta?._pageUrl || window.location.href,
+      ...(tempId ? { temp_id: tempId } : {}),
       ...(htmlContext ? { htmlContext } : {}),
       ...(faviconImgUrl ? { img_url: faviconImgUrl } : {}),
       is_extracted_img: isExtractedImg,
@@ -2040,7 +2271,6 @@ async function saveActiveCoreItem(request = {}) {
     // Optimistic UI: notify Side Panel to show a temporary card immediately
     // Skip if running inside an iframe — only the top-level frame should create optimistic cards
     if (window.self === window.top) {
-      const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       try {
         chrome.runtime.sendMessage({
           action:             'optimistic-card',
@@ -2075,6 +2305,228 @@ async function saveActiveCoreItem(request = {}) {
     }
 
     return { success: true, payload };
+}
+
+/**
+ * Find the dominant <img> element within rootElement.
+ * An image is dominant if its width/height ratio vs rootElement is >= 75%/40%
+ * (or 40%/75%) — same thresholds as dataExtractor.js getDominantMediaType().
+ */
+function getDominantImageElement(rootElement) {
+  const root = rootElement || document.body;
+  try {
+    const rootRect = root.getBoundingClientRect();
+    const coreW = rootRect.width;
+    const coreH = rootRect.height;
+    if (coreW <= 0 || coreH <= 0) return null;
+
+    const imgs = Array.from(root.querySelectorAll('img'));
+    for (const img of imgs) {
+      const r = img.getBoundingClientRect();
+      const mw = r.width || img.naturalWidth || 0;
+      const mh = r.height || img.naturalHeight || 0;
+      if (mw <= 0 || mh <= 0) continue;
+
+      const wr = mw / coreW;
+      const hr = mh / coreH;
+      if ((wr >= 0.75 && hr >= 0.4) || (hr >= 0.75 && wr >= 0.4)) {
+        return img;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Convert an <img> element to a clipboard-compatible Blob.
+ * Tries fetch() first (works when image is CORS-allowed), falls back to
+ * canvas drawing (works for same-origin or crossOrigin-anonymous images).
+ * Returns null if both methods fail.
+ */
+async function imgElementToBlob(imgEl) {
+  if (!imgEl || !imgEl.src) return null;
+
+  // Attempt 1: direct content-script fetch (works for same-origin and
+  // CORS-enabled cross-origin images). Only returns PNG blobs directly;
+  // non-PNG types fall through to Attempt 1.5 for re-encoding.
+  try {
+    const res = await fetch(imgEl.src, { mode: 'cors' });
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob.type === 'image/png') {
+        return blob;
+      }
+      // jpeg/webp/gif/other — fall through
+    }
+  } catch (_) { /* CORS-blocked — fall through */ }
+
+  // Attempt 1.5: background-script fetch (bypasses CORS via extension
+  // <all_urls> permission). Gets raw image bytes as base64 data URL, then
+  // re-encodes to PNG via canvas (required by Chrome's ClipboardItem).
+  try {
+    const response = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          { action: 'fetch-image', url: imgEl.src },
+          (r) => resolve(chrome.runtime.lastError ? null : r)
+        );
+      } catch (_) {
+        resolve(null);
+      }
+    });
+    if (response && response.success && response.dataUrl) {
+      const pngBlob = await dataUrlToPngBlob(response.dataUrl);
+      if (pngBlob) return pngBlob;
+    }
+  } catch (_) { /* background fetch failed — fall through */ }
+
+  // Attempt 2: canvas from already-rendered <img> element (same-origin only;
+  // cross-origin without crossOrigin attribute produces tainted canvas).
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width  = imgEl.naturalWidth  || imgEl.width  || 0;
+    canvas.height = imgEl.naturalHeight || imgEl.height || 0;
+    if (canvas.width === 0 || canvas.height === 0) return null;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(imgEl, 0, 0);
+    return await new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob || null), 'image/png');
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Decode a data URL (from background fetch) into a fresh PNG Blob by rendering
+ * it to an offscreen canvas. Because the image was fetched via the extension's
+ * background context, loading it from the data URL does NOT taint the canvas,
+ * so toBlob() works regardless of the original image's origin.
+ */
+async function dataUrlToPngBlob(dataUrl) {
+  try {
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('Image decode failed'));
+      img.src = dataUrl;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width  = img.naturalWidth  || img.width  || 0;
+    canvas.height = img.naturalHeight || img.height || 0;
+    if (canvas.width === 0 || canvas.height === 0) return null;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    return await new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob || null), 'image/png');
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Display a brief toast in the bottom-right of the page for 1.3 seconds
+ * indicating what was copied to the clipboard.
+ */
+function showCopyToast(message) {
+  try {
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = [
+      'position: fixed',
+      'top: 24px',
+      'left: 50%',
+      'transform: translateX(-50%)',
+      'background: rgba(188, 19, 254, 0.92)',
+      'color: white',
+      'padding: 10px 16px',
+      'border-radius: 6px',
+      'font-size: 13px',
+      'font-weight: 500',
+      'z-index: 2147483647',
+      'pointer-events: none',
+      'box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15)',
+      'transition: opacity 0.2s',
+      'white-space: pre-line',
+      'text-align: center',
+    ].join(';');
+    document.body.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => toast.remove(), 200);
+    }, 1300);
+  } catch (_) { /* DOM unavailable — silent */ }
+}
+
+/**
+ * Perform clipboard copy based on category. Returns success/fail info without
+ * showing any Toast. Toast display is handled separately by the caller after
+ * combining with save result.
+ *
+ * For 'Image' category: attempts binary image copy via imgElementToBlob.
+ *   Does NOT fall back to URL copy — instead returns { success: false } so the
+ *   caller can decide how to communicate the failure.
+ * For other categories: copies the URL as plain text.
+ */
+async function performClipboardCopy(category, url, rootElementForDominant) {
+  try {
+    if (category === 'Image') {
+      const imgEl = getDominantImageElement(rootElementForDominant);
+      if (imgEl) {
+        const blob = await imgElementToBlob(imgEl);
+        if (blob) {
+          await navigator.clipboard.write([
+            new ClipboardItem({ [blob.type]: blob })
+          ]);
+          return { success: true };
+        }
+      }
+      // Image binary copy failed — do not fall back to URL; caller will handle.
+      return { success: false };
+    } else {
+      await navigator.clipboard.writeText(url);
+      return { success: true };
+    }
+  } catch (err) {
+    console.warn('[KickClip] Clipboard copy failed:', err);
+    return { success: false };
+  }
+}
+
+/**
+ * Build a Toast message based on category, confirmedType, and combined
+ * copy/save success state.
+ *
+ * Matrix:
+ *   both ✓         → "{subject} copied & saved"
+ *   copy ✓ save ✗  → "{subject} copied\n(save failed)"
+ *   copy ✗ save ✓  → "{subject} saved\n(copy failed)"
+ *   both ✗         → "Failed"  (category-independent)
+ *
+ * Subject per category:
+ *   Image → "Image"
+ *   SNS   → confirmedType value (e.g., "contents", "post")
+ *   Mail  → "Mail URL"
+ *   Page/other → "Page URL"
+ */
+function buildToastMessage(category, confirmedType, copySuccess, saveSuccess) {
+  if (!copySuccess && !saveSuccess) return 'Failed';
+
+  let subject;
+  if (category === 'Image') {
+    subject = 'Image';
+  } else if (category === 'SNS') {
+    subject = String(confirmedType || '').trim() || 'post';
+  } else if (category === 'Mail') {
+    subject = 'Mail URL';
+  } else {
+    subject = 'Page URL';
+  }
+
+  if (copySuccess && saveSuccess) return `${subject} copied & saved`;
+  if (copySuccess && !saveSuccess) return `${subject} copied\n(save failed)`;
+  return `${subject} saved\n(copy failed)`;
 }
 
 function mountSaveMessageListener() {

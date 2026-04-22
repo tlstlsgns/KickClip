@@ -308,6 +308,8 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     req.body.is_extracted_img : undefined;
   const clientOverlayRatioRaw = typeof req.body.overlay_ratio === "number" ?
     req.body.overlay_ratio : undefined;
+  const clientTempIdRaw = typeof req.body.temp_id === "string" ?
+    req.body.temp_id.trim() : "";
   const isPortraitExtracted =
     isPageCategory && clientIsExtractedImgRaw === true &&
     typeof clientOverlayRatioRaw === "number" &&
@@ -359,6 +361,7 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     if (clientSenderRaw) firestoreEntry.sender = clientSenderRaw;
     if (clientPageDescriptionRaw) firestoreEntry.page_description = clientPageDescriptionRaw;
     if (clientScreenshotPaddingRaw > 0) firestoreEntry.screenshot_padding = clientScreenshotPaddingRaw;
+    if (clientTempIdRaw) firestoreEntry.temp_id = clientTempIdRaw;
     if (typeof clientIsExtractedImgRaw === "boolean") firestoreEntry.is_extracted_img = clientIsExtractedImgRaw;
     if (clientOverlayRatioRaw !== undefined && Number.isFinite(clientOverlayRatioRaw)) {
       firestoreEntry.overlay_ratio = clientOverlayRatioRaw;

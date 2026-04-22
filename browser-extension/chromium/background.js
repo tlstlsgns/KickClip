@@ -1012,6 +1012,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   
+  // Fetch image via background script to bypass CORS restrictions.
+  // Content-script fetch fails for cross-origin images without CORS headers.
+  // Background fetch uses extension's <all_urls> permission to succeed.
+  // Blob must be converted to base64 data URL for cross-context transfer.
+  if (request.action === 'fetch-image') {
+    (async () => {
+      try {
+        const res = await fetch(request.url);
+        if (!res.ok) {
+          sendResponse({ success: false, error: `HTTP ${res.status}` });
+          return;
+        }
+        const blob = await res.blob();
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          sendResponse({
+            success: true,
+            dataUrl: reader.result,
+            type: blob.type,
+          });
+        };
+        reader.onerror = () => {
+          sendResponse({ success: false, error: 'FileReader failed' });
+        };
+        reader.readAsDataURL(blob);
+      } catch (err) {
+        sendResponse({ success: false, error: String(err?.message || err) });
+      }
+    })();
+    return true;
+  }
+  
   if (request.action === 'get-instagram-thumbnail') {
     // Handle async operation (legacy support)
     getInstagramThumbnailUrl(request.shortcode)
