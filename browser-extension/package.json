@@ -6,6 +6,7 @@
   "scripts": {
     "build:dev": "node scripts/build-dev.js",
     "build:prod": "node scripts/build-prod.js",
+    "build:user-package": "node scripts/build-user-package.js",
     "postinstall": "node scripts/build-dev.js"
   },
   "devDependencies": {
