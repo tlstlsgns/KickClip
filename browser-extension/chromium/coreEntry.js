@@ -41,6 +41,7 @@ import {
   extractYouTubeShortcodeFromUrl,
   getYouTubeThumbnailUrl,
 } from './dataExtractor.js';
+import { getKCShadowRoot, getKCShadowElement, findKCElement } from './uiManager.js';
 
 let _kcUserReady = false; // true when kickclipUserId is confirmed
 let _pageMetaInitialized = false;
@@ -225,7 +226,7 @@ async function finalizeKCSaveFeedback(hiddenEls, startedAt) {
   try {
     const currentActive = state.activeCoreItem;
     if (currentActive && currentActive.nodeType === 1) {
-      const overlay = document.getElementById('blink-highlight-overlay');
+      const overlay = getKCShadowElement('blink-highlight-overlay');
       const hasShutter = overlay &&
         (overlay.classList.contains('shutter-success') ||
          overlay.classList.contains('shutter-error'));
@@ -370,7 +371,7 @@ async function captureScreenshotBase64(element) {
     const hiddenEls = [];
     for (const id of KC_UI_IDS) {
       try {
-        const el = document.getElementById(id);
+        const el = findKCElement(id);
         if (el && el.style.display !== 'none') {
           // Use opacity:0 instead of display:none so the element stays in
           // the layout (no visual jump) but is excluded from the screenshot.
@@ -481,7 +482,7 @@ async function capturePageScreenshotBase64() {
   const hiddenEls = [];
   for (const id of KC_UI_IDS) {
     try {
-      const el = document.getElementById(id);
+      const el = findKCElement(id);
       if (el && el.style.display !== 'none') {
         hiddenEls.push({ el, prevOpacity: el.style.opacity, prevTransition: el.style.transition });
         el.style.transition = '';
@@ -626,7 +627,7 @@ async function capturePageScreenshotRaw() {
   const hiddenEls = [];
   for (const id of KC_UI_IDS) {
     try {
-      const el = document.getElementById(id);
+      const el = findKCElement(id);
       if (el && el.style.display !== 'none') {
         hiddenEls.push({ el, prevOpacity: el.style.opacity, prevTransition: el.style.transition });
         el.style.transition = '';
@@ -1768,8 +1769,8 @@ async function saveActiveCoreItem(request = {}) {
     // No CoreItem active → save current page via OpenGraph metadata
     if (!activeItem || !activeUrl) {
       // Step 1: hide FullPageHighlight + StatusBadge for screenshot
-      const pageOverlayEl = document.getElementById('blink-fullpage-highlight-overlay');
-      const pageBadgeEl = document.getElementById('blink-status-badge-page');
+      const pageOverlayEl = getKCShadowElement('blink-fullpage-highlight-overlay');
+      const pageBadgeEl = getKCShadowElement('blink-status-badge-page');
       if (pageOverlayEl) { pageOverlayEl.style.transition = ''; pageOverlayEl.style.opacity = '0'; }
       if (pageBadgeEl)   { pageBadgeEl.style.transition = '';   pageBadgeEl.style.opacity = '0'; }
 
@@ -1993,8 +1994,8 @@ async function saveActiveCoreItem(request = {}) {
     const isYouTubeSave = !!youtubeThumbnailUrl;
 
     // Step 1: hide CoreHighlight + StatusBadge for screenshot
-    const coreOverlayEl = document.getElementById('blink-highlight-overlay');
-    const coreBadgeEl = document.getElementById('blink-status-badge-core');
+    const coreOverlayEl = getKCShadowElement('blink-highlight-overlay');
+    const coreBadgeEl = getKCShadowElement('blink-status-badge-core');
     if (coreOverlayEl) { coreOverlayEl.style.transition = ''; coreOverlayEl.style.opacity = '0'; }
     if (coreBadgeEl)   { coreBadgeEl.style.transition = '';   coreBadgeEl.style.opacity = '0'; }
 
@@ -2451,7 +2452,7 @@ function showCopyToast(message) {
       'white-space: pre-line',
       'text-align: center',
     ].join(';');
-    document.body.appendChild(toast);
+    getKCShadowRoot().appendChild(toast);
     setTimeout(() => {
       toast.style.opacity = '0';
       setTimeout(() => toast.remove(), 200);
@@ -2568,7 +2569,7 @@ function mountSaveMessageListener() {
             // not by a real data change — refreshing the badge here would race
             // against _kcUserReady and briefly show "Save It!" instead of the
             // shortcut prompt.
-            const pageOverlay = document.getElementById('blink-fullpage-highlight-overlay');
+            const pageOverlay = getKCShadowElement('blink-fullpage-highlight-overlay');
             if (pageOverlay && pageOverlay.style.opacity === '1') {
               showFullPageHighlight(false, refreshPageStatusBadge);
             }
@@ -3076,6 +3077,11 @@ function mountLifecycle() {
   } else {
     schedulePreScan(document, false, 'lifecycle-immediate');
   }
+  // Create the Shadow DOM host up-front so it exists from page load,
+  // before any UI function tries to use it. Idempotent — safe to call
+  // here and later; subsequent calls return the cached shadow root.
+  try { getKCShadowRoot(); } catch (_) { /* DOM unavailable — silent */ }
+
   mountWindowListeners();
   mountObservers();
   mountSaveMessageListener();

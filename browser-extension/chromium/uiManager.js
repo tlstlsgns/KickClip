@@ -105,9 +105,9 @@ function createBorderSvg(suffix) {
 }
 
 function updateBorderSvg(suffix, width, height, radius) {
-  const backRect = document.getElementById(`blink-back-${suffix}`);
-  const frontRect = document.getElementById(`blink-front-${suffix}`);
-  const path = document.getElementById(`blink-path-${suffix}`);
+  const backRect = findKCElement(`blink-back-${suffix}`);
+  const frontRect = findKCElement(`blink-front-${suffix}`);
+  const path = findKCElement(`blink-path-${suffix}`);
   if (!backRect || !frontRect || !path) return 0;
 
   const r = Math.min(radius, width / 2, height / 2);
@@ -136,7 +136,7 @@ function updateBorderSvg(suffix, width, height, radius) {
   // Return the computed totalLength so callers can pass it to startBorderAnimation()
   // without an additional getTotalLength() call.
   let computedLength = 0;
-  const ellipse = document.getElementById(`blink-ellipse-${suffix}`);
+  const ellipse = findKCElement(`blink-ellipse-${suffix}`);
   if (ellipse) {
     try {
       computedLength = path.getTotalLength();
@@ -149,8 +149,8 @@ function updateBorderSvg(suffix, width, height, radius) {
 }
 
 function startBorderAnimation(suffix, overlayEl, onFrame, cachedLength = 0) {
-  const ellipse = document.getElementById(`blink-ellipse-${suffix}`);
-  const path = document.getElementById(`blink-path-${suffix}`);
+  const ellipse = findKCElement(`blink-ellipse-${suffix}`);
+  const path = findKCElement(`blink-path-${suffix}`);
   if (!ellipse || !path) return null;
 
   // Use the pre-computed length from updateBorderSvg() to avoid a redundant
@@ -186,8 +186,90 @@ function startBorderAnimation(suffix, overlayEl, onFrame, cachedLength = 0) {
   return id;
 }
 
-function injectKickClipOverlayStyles() {
-  if (document.getElementById('blink-overlay-styles')) return;
+// ─────────────────────────────────────────────────────────────────────────
+// Shadow DOM host — single isolation boundary for all injected UI
+// ─────────────────────────────────────────────────────────────────────────
+//
+// All KickClip UI (highlights, badges, tooltips, etc.) will live inside a
+// Shadow DOM attached to a single host element on the page. This isolates
+// our styles from the hosting page's CSS (e.g. flaticon.com's global
+// `body > * { width: 100% }` rule that was stretching our badge to the
+// full viewport width).
+//
+// The host is a minimal <div id="kickclip-shadow-host"> appended to document.body.
+// Only this empty host is exposed to page CSS; everything meaningful lives
+// inside the closed shadow root and is unreachable from page scripts.
+//
+// NOTE: As of this phase (Phase 2), the shadow root is created but empty.
+// UI elements are still rendered in document.body. Migration happens in Phase 3.
+
+const KC_SHADOW_HOST_ID = 'kickclip-shadow-host';
+let _kcShadowRoot = null;
+
+/**
+ * Returns the KickClip shadow root, creating the host + shadow if needed.
+ * Idempotent — safe to call multiple times.
+ *
+ * The host element itself uses fixed positioning with zero size and
+ * pointer-events: none, so it cannot affect page layout or intercept clicks.
+ * Child elements inside the shadow root handle their own positioning and
+ * pointer events as needed.
+ */
+export function getKCShadowRoot() {
+  if (_kcShadowRoot) return _kcShadowRoot;
+
+  let host = document.getElementById(KC_SHADOW_HOST_ID);
+  if (!host) {
+    host = document.createElement('div');
+    host.id = KC_SHADOW_HOST_ID;
+    // The host itself is invisible and non-interactive. Inner children
+    // restore pointer-events when needed (e.g. tooltips, highlights).
+    host.style.cssText = [
+      'position: fixed',
+      'top: 0',
+      'left: 0',
+      'width: 0',
+      'height: 0',
+      'pointer-events: none',
+      'z-index: 2147483647',
+    ].join(';');
+    // Append to body if available, else documentElement (edge cases where
+    // body is replaced by the page).
+    (document.body || document.documentElement).appendChild(host);
+  }
+
+  _kcShadowRoot = host.shadowRoot || host.attachShadow({ mode: 'closed' });
+  return _kcShadowRoot;
+}
+
+/**
+ * Lookup an element by id inside the KickClip shadow root.
+ * Returns null if not found.
+ */
+export function getKCShadowElement(id) {
+  const root = getKCShadowRoot();
+  return root.getElementById ? root.getElementById(id) : root.querySelector(`#${id}`);
+}
+
+/**
+ * Look up an element by id, searching the shadow root first, then document.body.
+ * Used by UI functions during the Phase 3 migration when some elements have
+ * moved into the shadow root and others are still in document.body. Once the
+ * migration is complete, callers that should only find shadow elements can
+ * switch to using getKCShadowElement directly.
+ */
+export function findKCElement(id) {
+  const fromShadow = getKCShadowElement(id);
+  if (fromShadow) return fromShadow;
+  return document.getElementById(id);
+}
+
+/**
+ * Build a fresh <style> element with the overlay CSS. A new element is
+ * returned each call so it can be independently appended to the head AND
+ * to the shadow root (a DOM node can only have one parent).
+ */
+function buildOverlayStyleElement() {
   const style = document.createElement('style');
   style.id = 'blink-overlay-styles';
   style.textContent = `
@@ -238,18 +320,21 @@ function injectKickClipOverlayStyles() {
 }
 
 `;
-  const target = document.head || document.documentElement;
-  if (target) {
-    target.appendChild(style);
-  } else {
-    document.addEventListener(
-      'DOMContentLoaded',
-      () => {
-        (document.head || document.documentElement).appendChild(style);
-      },
-      { once: true }
-    );
-  }
+  return style;
+}
+
+function injectKickClipOverlayStyles() {
+  // All KickClip UI lives inside the shadow root, so the stylesheet is
+  // injected only there. The head-injected copy from earlier migration
+  // phases has been removed now that no UI elements render in document.body.
+  try {
+    const shadowRoot = getKCShadowRoot();
+    // Guard: shadow root may not be ready in early edge cases.
+    if (shadowRoot && !shadowRoot.getElementById('blink-overlay-styles')) {
+      const shadowStyle = buildOverlayStyleElement();
+      shadowRoot.appendChild(shadowStyle);
+    }
+  } catch (_) { /* shadow root unavailable — silent */ }
 }
 
 injectKickClipOverlayStyles();
@@ -257,7 +342,7 @@ injectKickClipOverlayStyles();
 // Update FullPageHighlight SVG border on window resize
 window.addEventListener('resize', () => {
   try {
-    const el = document.getElementById(FULLPAGE_OVERLAY_ID);
+    const el = getKCShadowElement(FULLPAGE_OVERLAY_ID);
     if (!el || el.style.opacity === '0') return;
     const w = document.documentElement.clientWidth;
     const h = document.documentElement.clientHeight;
@@ -271,7 +356,7 @@ window.addEventListener('resize', () => {
  */
 export function updateCoreHighlightClass(isSaved, shutterState = 'none', forceReplace = false) {
   try {
-    const overlay = document.getElementById(PURPLE_OVERLAY_ID);
+    const overlay = getKCShadowElement(PURPLE_OVERLAY_ID);
     if (!overlay) return;
     if (!forceReplace && shutterState === 'none' &&
         (overlay.classList.contains('shutter-success') ||
@@ -281,7 +366,7 @@ export function updateCoreHighlightClass(isSaved, shutterState = 'none', forceRe
     else if (shutterState === 'error') overlay.classList.add('shutter-error');
 
     // Sync core status badge
-    const coreBadge = document.getElementById(CORE_BADGE_ID);
+    const coreBadge = getKCShadowElement(CORE_BADGE_ID);
     // Ensure transition is active for shutter color change
     if (coreBadge) coreBadge.style.transition = '';
     if (coreBadge) {
@@ -305,7 +390,7 @@ export function updateCoreHighlightClass(isSaved, shutterState = 'none', forceRe
  */
 export function updateFullPageHighlightClass(isSaved, shutterState = 'none', forceReplace = false) {
   try {
-    const overlay = document.getElementById(FULLPAGE_OVERLAY_ID);
+    const overlay = getKCShadowElement(FULLPAGE_OVERLAY_ID);
     if (!overlay) return;
     if (!forceReplace && shutterState === 'none' &&
         (overlay.classList.contains('shutter-success') ||
@@ -315,7 +400,7 @@ export function updateFullPageHighlightClass(isSaved, shutterState = 'none', for
     else if (shutterState === 'error') overlay.classList.add('shutter-error');
 
     // Sync page status badge
-    const pageBadge = document.getElementById(PAGE_BADGE_ID);
+    const pageBadge = getKCShadowElement(PAGE_BADGE_ID);
     // Ensure transition is active for shutter color change
     if (pageBadge) pageBadge.style.transition = '';
     if (pageBadge) {
@@ -361,7 +446,7 @@ function formatPlatformLabel(platform) {
 
 function ensurePurpleOverlay() {
   injectKickClipOverlayStyles();
-  let el = document.getElementById(PURPLE_OVERLAY_ID);
+  let el = getKCShadowElement(PURPLE_OVERLAY_ID);
   if (el) return el;
   el = document.createElement('div');
   el.id = PURPLE_OVERLAY_ID;
@@ -383,12 +468,12 @@ function ensurePurpleOverlay() {
   el.classList.add('blink-default');
   const borderSvg = createBorderSvg('core');
   el.appendChild(borderSvg);
-  document.body.appendChild(el);
+  getKCShadowRoot().appendChild(el);
   return el;
 }
 
 function ensureFullPageOverlay() {
-  let el = document.getElementById(FULLPAGE_OVERLAY_ID);
+  let el = getKCShadowElement(FULLPAGE_OVERLAY_ID);
   if (!el) {
     el = document.createElement('div');
     el.id = FULLPAGE_OVERLAY_ID;
@@ -409,13 +494,13 @@ function ensureFullPageOverlay() {
   `;
     const borderSvg = createBorderSvg('page');
     el.appendChild(borderSvg);
-    document.body.appendChild(el);
+    getKCShadowRoot().appendChild(el);
   }
   return el;
 }
 
 function ensurePageBadge() {
-  let el = document.getElementById(PAGE_BADGE_ID);
+  let el = getKCShadowElement(PAGE_BADGE_ID);
   if (el) return el;
   el = document.createElement('div');
   el.id = PAGE_BADGE_ID;
@@ -435,12 +520,12 @@ function ensurePageBadge() {
     top: 12px;
     left: 12px;
   `;
-  document.body.appendChild(el);
+  getKCShadowRoot().appendChild(el);
   return el;
 }
 
 function ensureCoreBadge() {
-  let el = document.getElementById(CORE_BADGE_ID);
+  let el = getKCShadowElement(CORE_BADGE_ID);
   if (el) return el;
   el = document.createElement('div');
   el.id = CORE_BADGE_ID;
@@ -460,7 +545,7 @@ function ensureCoreBadge() {
       top: 0;
       left: 0;
     `;
-  document.body.appendChild(el);
+  getKCShadowRoot().appendChild(el);
   return el;
 }
 
@@ -522,7 +607,7 @@ export function showCoreStatusBadge(badgeState = 'default') {
 
 export function hidePageStatusBadge() {
   try {
-    const el = document.getElementById(PAGE_BADGE_ID);
+    const el = getKCShadowElement(PAGE_BADGE_ID);
     if (el) {
       el.style.transition = 'none';
       el.style.opacity = '0';
@@ -534,7 +619,7 @@ export function hidePageStatusBadge() {
 
 export function hideCoreStatusBadge() {
   try {
-    const el = document.getElementById(CORE_BADGE_ID);
+    const el = getKCShadowElement(CORE_BADGE_ID);
     if (el) {
       // Keep opacity transition for fade-out; disable only background transition for instant color reset
       el.style.transition = 'opacity 0.15s ease';
@@ -551,7 +636,7 @@ export function hideCoreStatusBadge() {
 
 export function positionCoreStatusBadge(clientX, clientY) {
   try {
-    const el = document.getElementById(CORE_BADGE_ID);
+    const el = getKCShadowElement(CORE_BADGE_ID);
     if (!el || el.style.opacity === '0') return;
     const x = Number(clientX);
     const y = Number(clientY);
@@ -569,7 +654,7 @@ export function positionCoreStatusBadge(clientX, clientY) {
 }
 
 function ensureMetadataTooltip() {
-  let el = document.getElementById(METADATA_TOOLTIP_ID);
+  let el = getKCShadowElement(METADATA_TOOLTIP_ID);
   if (el) return el;
   el = document.createElement('div');
   el.id = METADATA_TOOLTIP_ID;
@@ -606,7 +691,7 @@ function ensureMetadataTooltip() {
       <div data-kc-tooltip-ai-summary style="margin-top:3px;font-size:11px;line-height:1.45;opacity:0.90;word-break:break-word;"></div>
     </div>
   `;
-  document.body.appendChild(el);
+  getKCShadowRoot().appendChild(el);
   return el;
 }
 
@@ -661,7 +746,7 @@ function setMetadataTooltipContent(meta) {
 
 export function setAiTooltipContent({ type, summary }) {
   try {
-    const el = document.getElementById(METADATA_TOOLTIP_ID);
+    const el = getKCShadowElement(METADATA_TOOLTIP_ID);
     if (!el) return;
     const aiWrap = el.querySelector('[data-kc-tooltip-ai]');
     const typeEl = el.querySelector('[data-kc-tooltip-ai-type]');
@@ -675,7 +760,7 @@ export function setAiTooltipContent({ type, summary }) {
 
 export function clearAiTooltipContent() {
   try {
-    const el = document.getElementById(METADATA_TOOLTIP_ID);
+    const el = getKCShadowElement(METADATA_TOOLTIP_ID);
     if (!el) return;
     const aiWrap = el.querySelector('[data-kc-tooltip-ai]');
     const typeEl = el.querySelector('[data-kc-tooltip-ai-type]');
@@ -724,7 +809,7 @@ export function showMetadataTooltip(meta, clientX = null, clientY = null) {
 }
 
 export function hideMetadataTooltip() {
-  const el = document.getElementById(METADATA_TOOLTIP_ID);
+  const el = getKCShadowElement(METADATA_TOOLTIP_ID);
   if (el) el.style.display = 'none';
 }
 
@@ -764,7 +849,7 @@ export function showCoreHighlight(coreItem, isSaved = false, rectOverride = null
     if (!isScrollUpdate) {
       // Reset shutter classes immediately (no transition) before applying new state.
       // Handles adjacent CoreItem hover where hideCoreHighlight() is not called.
-      const coreBadge = document.getElementById(CORE_BADGE_ID);
+      const coreBadge = getKCShadowElement(CORE_BADGE_ID);
       overlay.classList.remove('shutter-success', 'shutter-error');
       if (coreBadge) {
         coreBadge.style.transition = 'none';
@@ -798,7 +883,7 @@ export function showCoreHighlight(coreItem, isSaved = false, rectOverride = null
 }
 
 export function hideCoreHighlight() {
-  const overlay = document.getElementById(PURPLE_OVERLAY_ID);
+  const overlay = getKCShadowElement(PURPLE_OVERLAY_ID);
   if (overlay) {
     overlay.style.opacity = '0';
     // Reset shutter classes immediately — no transition on reset
@@ -832,7 +917,7 @@ export function showFullPageHighlight(isSaved = false, onBadgeShow = null) {
       // Guard: overlay opacity is set to '0' synchronously by
       // hideFullPageHighlight(), so if it is not '1' the overlay
       // has been hidden since this timer was scheduled — skip badge show.
-      const overlay = document.getElementById(FULLPAGE_OVERLAY_ID);
+      const overlay = getKCShadowElement(FULLPAGE_OVERLAY_ID);
       if (!overlay || overlay.style.opacity !== '1') return;
       // Delegate badge text + show to the caller-supplied callback so
       // login state is evaluated at display time, not at schedule time.
@@ -890,7 +975,7 @@ export function hideFullPageHighlight() {
     clearTimeout(_fullPageHideTimer);
     _fullPageHideTimer = null;
   }
-  const el = document.getElementById(FULLPAGE_OVERLAY_ID);
+  const el = getKCShadowElement(FULLPAGE_OVERLAY_ID);
   if (el) {
     el.style.opacity = '0';
     // Reset shutter classes immediately — no transition on reset
@@ -923,7 +1008,7 @@ export function triggerShutterEffect(type, status = 'error') {
 }
 
 function ensureGreenLayer() {
-  let layer = document.getElementById(GREEN_LAYER_ID);
+  let layer = getKCShadowElement(GREEN_LAYER_ID);
   if (layer) return layer;
   layer = document.createElement('div');
   layer.id = GREEN_LAYER_ID;
@@ -937,7 +1022,7 @@ function ensureGreenLayer() {
     height: 0;
     display: none;
   `;
-  document.body.appendChild(layer);
+  getKCShadowRoot().appendChild(layer);
   return layer;
 }
 
