@@ -951,6 +951,99 @@
       font-size: 9px;
       font-weight: 500;
     }
+    .data-card-header.delete-pending .data-card-upload {
+      display: none;
+    }
+
+    /* Upload button — mirrors .data-card-delete hover behavior */
+    .data-card-upload {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      align-self: stretch;
+      flex-shrink: 0;
+      margin-left: auto;
+      cursor: pointer;
+      pointer-events: auto !important;
+    }
+    .data-card-upload * { pointer-events: auto !important; }
+    .data-card-upload-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: none;
+      border-radius: 0;
+      cursor: pointer;
+      color: inherit;
+    }
+    .data-card-upload-btn svg {
+      width: 10px;
+      height: 10px;
+      stroke: rgba(0, 0, 0, 0.5);
+      stroke-width: 2;
+      fill: none;
+      transition: stroke 150ms ease, opacity 150ms ease;
+    }
+    .card-wrapper .data-card-upload-btn svg {
+      opacity: 1;
+      stroke: rgba(0, 0, 0, 0.6);
+      transition: opacity 150ms ease, stroke 150ms ease;
+    }
+    .card-wrapper:not(:hover) .data-card-upload-btn svg {
+      opacity: 0;
+    }
+    .data-card-upload-btn:hover svg {
+      stroke: rgba(0, 0, 0, 0.85);
+    }
+
+    /* Upload destination popover (Phase U1) */
+    .kc-upload-popover {
+      display: none;
+      position: fixed;
+      z-index: 2147483000;
+      min-width: 168px;
+      padding: 4px;
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+      box-sizing: border-box;
+    }
+    .kc-upload-popover.kc-upload-popover--open {
+      display: block;
+    }
+    .kc-upload-popover-item {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      margin: 0;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      font-family: 'Roboto', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+      text-align: left;
+      cursor: pointer;
+      box-sizing: border-box;
+    }
+    .kc-upload-popover-item:hover {
+      background: rgba(0, 0, 0, 0.06);
+    }
+    .kc-upload-popover-icon {
+      flex-shrink: 0;
+      font-size: 14px;
+      line-height: 1;
+    }
 
     /* ── DnD guide line ── */
     .dnd-guide-wrapper {

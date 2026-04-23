@@ -79,6 +79,15 @@ let _currentShortcut = ''; // raw Chrome shortcut string, e.g. 'Ctrl+Shift+S'
 // key: tempId, value: { url, title, imgUrl, cardContainer }
 const optimisticCards = new Map();
 
+// Maps each rendered `.data-card` element to its backing Firestore item object
+// (used by upload UI — WeakMap avoids retaining detached DOM).
+const kcCardItemByEl = new WeakMap();
+
+/** @type {HTMLDivElement | null} */
+let kcUploadPopoverEl = null;
+/** @type {(() => void) | null} */
+let kcUploadOutsideDismiss = null;
+
 // window-level drag state (mirrors main.js pattern)
 window.currentDraggedWrapper  = null;
 window.currentDraggedItemId   = null;
@@ -655,6 +664,15 @@ function createDataCard(item) {
             <span class="data-card-content-type">Mail</span>
             ${mailPlatform ? `<span class="data-card-type-separator">›</span><span class="data-card-detail-type">${esc(mailPlatform)}</span>` : ''}
           </div>
+          <div class="data-card-upload" title="Upload to folder">
+            <button type="button" class="data-card-upload-btn" aria-label="Upload to folder">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+            </button>
+          </div>
           <div class="data-card-delete" title="Delete">
             <div class="data-card-delete-btn">
               <svg viewBox="0 0 24 24" class="delete-icon-x">
@@ -682,6 +700,18 @@ function createDataCard(item) {
         </div>
       </div>`;
   }
+
+  // Upload button HTML (shared) — appears immediately left of delete in header
+  const uploadBtn = `
+    <div class="data-card-upload" title="Upload to folder">
+      <button type="button" class="data-card-upload-btn" aria-label="Upload to folder">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+      </button>
+    </div>`;
 
   // Delete button HTML (shared)
   const deleteBtn = `
@@ -721,6 +751,7 @@ function createDataCard(item) {
               return url ? `<span class="data-card-url">${esc(url)}</span>` : '';
             })()}
           </div>
+          ${uploadBtn}
           ${deleteBtn}
         </div>
         <div class="data-card-info">
@@ -750,6 +781,7 @@ function createDataCard(item) {
             }
           })()}
         </div>
+        ${uploadBtn}
         ${deleteBtn}
       </div>
       <div class="data-card-main">
@@ -780,6 +812,8 @@ function createCardElement(item, isNew = false) {
     card.dataset.directoryId = item.directoryId;
   }
   card.dataset.imgUrl = item.img_url || '';
+
+  kcCardItemByEl.set(card, item);
 
   const wrapper = document.createElement('div');
   wrapper.className  = 'card-wrapper';
@@ -1131,6 +1165,147 @@ async function moveDirectoryToPosition(userId, directoryId, newIndex) {
   if (!res.ok) throw new Error(`move-directory failed: ${res.status}`);
 }
 
+// ── Upload destination popover (Phase U1 — UI only, no file I/O) ──────────────
+
+function onKcUploadEscapeKey(ev) {
+  if (ev.key === 'Escape') closeKcUploadPopover();
+}
+
+function closeKcUploadPopover() {
+  if (kcUploadOutsideDismiss) {
+    document.removeEventListener('click', kcUploadOutsideDismiss, false);
+    kcUploadOutsideDismiss = null;
+  }
+  document.removeEventListener('keydown', onKcUploadEscapeKey, false);
+  if (kcUploadPopoverEl) {
+    kcUploadPopoverEl.classList.remove('kc-upload-popover--open');
+    kcUploadPopoverEl.style.display = 'none';
+    delete kcUploadPopoverEl._kcItem;
+    delete kcUploadPopoverEl._kcAnchorBtn;
+  }
+}
+
+function ensureKcUploadPopover() {
+  if (kcUploadPopoverEl) return kcUploadPopoverEl;
+  const app = document.getElementById('app');
+  if (!app) return null;
+  const div = document.createElement('div');
+  div.className = 'kc-upload-popover';
+  div.setAttribute('role', 'menu');
+  div.innerHTML = `
+    <button type="button" class="kc-upload-popover-item" data-destination="local" role="menuitem">
+      <span class="kc-upload-popover-icon" aria-hidden="true">📁</span>
+      <span>내 컴퓨터 폴더</span>
+    </button>
+    <button type="button" class="kc-upload-popover-item" data-destination="drive" role="menuitem">
+      <span class="kc-upload-popover-icon" aria-hidden="true">☁️</span>
+      <span>Google Drive</span>
+    </button>
+  `;
+  div.querySelectorAll('.kc-upload-popover-item').forEach((itemBtn) => {
+    itemBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const dest = itemBtn.getAttribute('data-destination') || '';
+      const item = div._kcItem;
+      closeKcUploadPopover();
+      if (!item) return;
+      const itemId = item.id || getItemId(item);
+      console.log('[KICKCLIP-LOG] Upload requested:', { destination: dest, itemId, item });
+    });
+  });
+  app.appendChild(div);
+  kcUploadPopoverEl = div;
+  return div;
+}
+
+function positionKcUploadPopover(anchorEl) {
+  const pop = ensureKcUploadPopover();
+  if (!pop || !anchorEl) return;
+
+  pop.classList.remove('kc-upload-popover--open');
+  pop.style.display = 'block';
+  pop.style.visibility = 'hidden';
+  pop.style.position = 'fixed';
+  pop.style.left = '0px';
+  pop.style.top = '0px';
+
+  requestAnimationFrame(() => {
+    const ar = anchorEl.getBoundingClientRect();
+    const pr = pop.getBoundingClientRect();
+    const pad = 6;
+    let left = ar.left;
+    let top = ar.bottom + 4;
+
+    if (left + pr.width > window.innerWidth - pad) {
+      left = ar.right - pr.width;
+    }
+    if (left < pad) left = pad;
+
+    if (top + pr.height > window.innerHeight - pad) {
+      top = ar.top - pr.height - 4;
+    }
+    if (top < pad) top = pad;
+
+    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(top)}px`;
+    pop.style.visibility = '';
+    pop.style.display = '';
+    pop.classList.add('kc-upload-popover--open');
+  });
+}
+
+function openKcUploadPopover(anchorBtn, item) {
+  const pop = ensureKcUploadPopover();
+  if (!pop) return;
+
+  const wasOpen = pop.classList.contains('kc-upload-popover--open');
+  const prevAnchor = pop._kcAnchorBtn;
+  if (wasOpen && prevAnchor === anchorBtn) {
+    closeKcUploadPopover();
+    return;
+  }
+  if (wasOpen && prevAnchor !== anchorBtn) {
+    closeKcUploadPopover();
+  }
+
+  pop._kcItem = item;
+  pop._kcAnchorBtn = anchorBtn;
+
+  positionKcUploadPopover(anchorBtn);
+
+  if (kcUploadOutsideDismiss) {
+    document.removeEventListener('click', kcUploadOutsideDismiss, false);
+  }
+  const outside = (ev) => {
+    if (ev.target.closest('.kc-upload-popover')) return;
+    if (ev.target.closest('.data-card-upload')) return;
+    closeKcUploadPopover();
+  };
+  kcUploadOutsideDismiss = outside;
+  setTimeout(() => {
+    document.addEventListener('click', outside, false);
+  }, 0);
+  document.addEventListener('keydown', onKcUploadEscapeKey, false);
+}
+
+function attachUploadHandlers(container) {
+  container.querySelectorAll('.data-card-upload').forEach((wrap) => {
+    const newWrap = wrap.cloneNode(true);
+    wrap.parentNode.replaceChild(newWrap, wrap);
+    const btn = newWrap.querySelector('.data-card-upload-btn');
+    if (!btn) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const card = newWrap.closest('.data-card');
+      if (!card) return;
+      if (card.querySelector('.data-card-header.delete-pending')) return;
+      const item = kcCardItemByEl.get(card);
+      if (!item) return;
+      openKcUploadPopover(btn, item);
+    });
+  });
+}
+
 // ── Delete handlers ───────────────────────────────────────────────────────────
 function attachDeleteHandlers(container) {
   container.querySelectorAll('.data-card-delete').forEach((btn) => {
@@ -1138,6 +1313,7 @@ function attachDeleteHandlers(container) {
     btn.parentNode.replaceChild(newBtn, btn);
 
     newBtn.addEventListener('click', (e) => {
+      closeKcUploadPopover();
       e.stopPropagation();
       const header  = newBtn.closest('.data-card-header');
       const card    = newBtn.closest('.data-card');
@@ -1401,8 +1577,10 @@ function attachCardClickHandlers() {
     }
 
     // Replace card node to clear old listeners
+    const mappedItem = kcCardItemByEl.get(card);
     const newCard = card.cloneNode(true);
     card.parentNode.replaceChild(newCard, card);
+    if (mappedItem) kcCardItemByEl.set(newCard, mappedItem);
 
     // Dragstart
     wrapper.addEventListener('dragstart', (e) => {
@@ -1463,6 +1641,7 @@ function attachCardClickHandlers() {
 
       // Ignore clicks on the delete button area
       if (e.target.closest('.data-card-delete')) return;
+      if (e.target.closest('.data-card-upload')) return;
 
       const clickedWrapper = newCard.closest('.card-wrapper');
       if (!clickedWrapper) return;
@@ -1487,6 +1666,7 @@ function attachCardClickHandlers() {
   });
 
   attachDeleteHandlers(document);
+  attachUploadHandlers(document);
 
   // Delegated image error handler (CSP blocks inline onerror)
   document.querySelectorAll('.data-card-imgcontainer').forEach((container) => {
@@ -1910,6 +2090,8 @@ function loadData() {
           existingCard.dataset.imgUrl = item.img_url;
         }
 
+        kcCardItemByEl.set(existingCard, item);
+
         // Remove optimistic marker so the DOM clear loop won't skip this container
         // and future loadData() passes treat it as a normal rendered card.
         delete existingContainer.dataset.optimisticCard;
@@ -1961,6 +2143,7 @@ function loadData() {
 
         if (!removedForRebuild) {
           displayedItemIds.add(itemId);
+          kcCardItemByEl.set(existingCard, itemToRender ?? item);
           const existingContainer = existingCard.closest('.card-container');
           if (existingContainer) {
             const targetList = getCategoryList(resolveItemListKey(itemToRender ?? item));
