@@ -311,6 +311,7 @@ Copied from DEV to PROD verbatim. See Firebase Console for current content.
     - **Sub-task 5.3 — Precise tempId-based matching:** `sidepanel.js` item-to-optimistic-card matching now uses Priority 1 (exact `item.temp_id` match via `optimisticCards.has(tempId)`) with Priority 2 (URL-based iteration) as fallback for legacy Firestore docs without `temp_id`. DOM in-place promotion logic unchanged — the change is isolated to a single ~15-line matching block.
     - Resolves ambiguity when the same URL is saved multiple times in quick succession.
     - Existing in-place DOM promotion behavior preserved — OptimisticCard element continues to exist and is updated (dataset fields) rather than replaced, avoiding flash/flicker.
+- **2026-04-23** — Shadow DOM migration (all UI isolated from host-page CSS) + Blink → KickClip internal identifier rebrand.
 - **2026-04-21 (evening)** — Taxonomy overhaul + YouTube thumbnail feature + data migration.
   - **Sub-task 1 — Unified Video card layout** with Page card layout (horizontal "portrait extracted" style).
   - **Sub-task 2 — YouTube thumbnail extraction:**
