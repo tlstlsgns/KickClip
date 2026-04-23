@@ -3,14 +3,14 @@
 // We use dynamic import() to load our ESM entry (`coreEntry.js`) and its dependency graph.
 
 // Loader-only guard (do NOT share the same flag as coreEntry.js)
-if (window.__blinkContentScriptLoaderLoaded) {
+if (window.__kickclipContentScriptLoaderLoaded) {
   // Loader already ran, exit early
 } else {
-  window.__blinkContentScriptLoaderLoaded = true;
+  window.__kickclipContentScriptLoaderLoaded = true;
 
   // Do not run in Electron-based desktop apps (e.g. Claude Desktop, VS Code, Notion).
   // These apps embed a Chromium engine but are not regular browser tabs —
-  // Blink should only operate in a real browser context.
+  // KickClip should only operate in a real browser context.
   const _isElectronApp = typeof navigator !== 'undefined' &&
     navigator.userAgent.includes('Electron');
 

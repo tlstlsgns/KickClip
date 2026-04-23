@@ -752,7 +752,7 @@ export function extractTitleFromCoreItem(coreItem, activeHoverUrl = null) {
       const fullLog = [header, body, footer].join('\n');
       lastExtractionLog = fullLog;
       if (typeof window !== 'undefined') {
-        window.__blinkLastExtractionLog = fullLog;
+        window.__kickclipLastExtractionLog = fullLog;
       }
     } catch (e) {}
   };

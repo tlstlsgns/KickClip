@@ -1,13 +1,13 @@
 /**
- * Blink Brand Config (Extension)
+ * KickClip Brand Config (Extension)
  * Single source of truth for branding in the browser extension codebase.
  */
 export const BRAND = {
-  NAME: 'Blink',
+  NAME: 'KickClip',
   VERSION: '1.0.0',
   KEY_COLOR: 'purple',
   KEY_COLOR_HEX: '#BC13FE',
-  LOG_PREFIX: '[BLINK-LOG]',
+  LOG_PREFIX: '[KICKCLIP-LOG]',
 };
 
 const DEV_FIREBASE_CONFIG = {

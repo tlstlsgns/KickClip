@@ -70,7 +70,7 @@ const KC_SAVE_HANDLED = '__kc_save_handled__';
 const KC_SAVE_RELAY = '__kc_save_relay__';
 
 /** Metadata tooltip id — hidden briefly during save (shutter uses overlay fills in uiManager). */
-const METADATA_TOOLTIP_ID = 'blink-metadata-tooltip';
+const METADATA_TOOLTIP_ID = 'kickclip-metadata-tooltip';
 const SAVE_FEEDBACK_KC_MIN_MS = 80;
 
 function postHighlightToTop(type, payload = {}) {
@@ -191,7 +191,7 @@ function waitForRepaint() {
  * Temporarily hides purple overlay + metadata tooltip (opacity 0, layout preserved).
  * @returns {Array<{ el: HTMLElement, prevOpacity: string, prevTransition: string }>}
  */
-/** Hides only the metadata tooltip during save; purple/full-page “blink” is `triggerShutterEffect`. */
+/** Hides only the metadata tooltip during save; purple/full-page shutter flash is `triggerShutterEffect`. */
 function hideKCSaveFeedbackUi() {
   const hidden = [];
   for (const id of [METADATA_TOOLTIP_ID]) {
@@ -215,7 +215,7 @@ function restoreKCSaveFeedbackUi(hiddenEls) {
   }
 }
 
-/** Ensures a minimum visible “blink” duration, then restores save-feedback UI and re-applies purple. */
+/** Ensures a minimum visible shutter duration, then restores save-feedback UI and re-applies purple. */
 async function finalizeKCSaveFeedback(hiddenEls, startedAt) {
   const elapsed = Date.now() - startedAt;
   const wait = Math.max(0, SAVE_FEEDBACK_KC_MIN_MS - elapsed);
@@ -226,7 +226,7 @@ async function finalizeKCSaveFeedback(hiddenEls, startedAt) {
   try {
     const currentActive = state.activeCoreItem;
     if (currentActive && currentActive.nodeType === 1) {
-      const overlay = getKCShadowElement('blink-highlight-overlay');
+      const overlay = getKCShadowElement('kickclip-highlight-overlay');
       const hasShutter = overlay &&
         (overlay.classList.contains('shutter-success') ||
          overlay.classList.contains('shutter-error'));
@@ -363,10 +363,10 @@ async function captureScreenshotBase64(element) {
     if (!rect || rect.width <= 0 || rect.height <= 0) return null;
 
     const KC_UI_IDS = [
-      'blink-highlight-overlay',
-      'blink-metadata-tooltip',
-      'blink-green-candidate-layer',
-      'blink-fullpage-highlight-overlay',
+      'kickclip-highlight-overlay',
+      'kickclip-metadata-tooltip',
+      'kickclip-green-candidate-layer',
+      'kickclip-fullpage-highlight-overlay',
     ];
     const hiddenEls = [];
     for (const id of KC_UI_IDS) {
@@ -472,10 +472,10 @@ async function captureScreenshotBase64(element) {
 
 async function capturePageScreenshotBase64() {
   const KC_UI_IDS = [
-    'blink-highlight-overlay',
-    'blink-metadata-tooltip',
-    'blink-green-candidate-layer',
-    'blink-fullpage-highlight-overlay',
+    'kickclip-highlight-overlay',
+    'kickclip-metadata-tooltip',
+    'kickclip-green-candidate-layer',
+    'kickclip-fullpage-highlight-overlay',
   ];
 
   // Temporarily hide KickClip UI elements
@@ -617,10 +617,10 @@ async function capturePageScreenshotBase64() {
  */
 async function capturePageScreenshotRaw() {
   const KC_UI_IDS = [
-    'blink-highlight-overlay',
-    'blink-metadata-tooltip',
-    'blink-green-candidate-layer',
-    'blink-fullpage-highlight-overlay',
+    'kickclip-highlight-overlay',
+    'kickclip-metadata-tooltip',
+    'kickclip-green-candidate-layer',
+    'kickclip-fullpage-highlight-overlay',
   ];
 
   // Temporarily hide KickClip UI elements
@@ -1769,8 +1769,8 @@ async function saveActiveCoreItem(request = {}) {
     // No CoreItem active → save current page via OpenGraph metadata
     if (!activeItem || !activeUrl) {
       // Step 1: hide FullPageHighlight + StatusBadge for screenshot
-      const pageOverlayEl = getKCShadowElement('blink-fullpage-highlight-overlay');
-      const pageBadgeEl = getKCShadowElement('blink-status-badge-page');
+      const pageOverlayEl = getKCShadowElement('kickclip-fullpage-highlight-overlay');
+      const pageBadgeEl = getKCShadowElement('kickclip-status-badge-page');
       if (pageOverlayEl) { pageOverlayEl.style.transition = ''; pageOverlayEl.style.opacity = '0'; }
       if (pageBadgeEl)   { pageBadgeEl.style.transition = '';   pageBadgeEl.style.opacity = '0'; }
 
@@ -1994,8 +1994,8 @@ async function saveActiveCoreItem(request = {}) {
     const isYouTubeSave = !!youtubeThumbnailUrl;
 
     // Step 1: hide CoreHighlight + StatusBadge for screenshot
-    const coreOverlayEl = getKCShadowElement('blink-highlight-overlay');
-    const coreBadgeEl = getKCShadowElement('blink-status-badge-core');
+    const coreOverlayEl = getKCShadowElement('kickclip-highlight-overlay');
+    const coreBadgeEl = getKCShadowElement('kickclip-status-badge-core');
     if (coreOverlayEl) { coreOverlayEl.style.transition = ''; coreOverlayEl.style.opacity = '0'; }
     if (coreBadgeEl)   { coreBadgeEl.style.transition = '';   coreBadgeEl.style.opacity = '0'; }
 
@@ -2569,7 +2569,7 @@ function mountSaveMessageListener() {
             // not by a real data change — refreshing the badge here would race
             // against _kcUserReady and briefly show "Save It!" instead of the
             // shortcut prompt.
-            const pageOverlay = getKCShadowElement('blink-fullpage-highlight-overlay');
+            const pageOverlay = getKCShadowElement('kickclip-fullpage-highlight-overlay');
             if (pageOverlay && pageOverlay.style.opacity === '1') {
               showFullPageHighlight(false, refreshPageStatusBadge);
             }
@@ -2705,7 +2705,7 @@ function mountSaveMessageListener() {
           if (!activeItem || !activeUrl) return;
 
           const saveFeedbackHidden = hideKCSaveFeedbackUi();
-          const saveBlinkStartedAt = Date.now();
+          const saveKickClipStartedAt = Date.now();
           try {
             const saveShutterStatus = await resolveSaveShutterStatus();
             triggerShutterEffect('core', saveShutterStatus);
@@ -2756,7 +2756,7 @@ function mountSaveMessageListener() {
               '*'
             );
           } finally {
-            await finalizeKCSaveFeedback(saveFeedbackHidden, saveBlinkStartedAt);
+            await finalizeKCSaveFeedback(saveFeedbackHidden, saveKickClipStartedAt);
           }
         } catch (err) {}
       },
@@ -2912,8 +2912,8 @@ function mountWindowListeners() {
 
   // pushState / replaceState: SPA routing (patch history methods)
   // Guard against double-patching if mountWindowListeners() is called again
-  if (!window.__blinkHistoryPatched) {
-    window.__blinkHistoryPatched = true;
+  if (!window.__kickclipHistoryPatched) {
+    window.__kickclipHistoryPatched = true;
     const _isYouTubeOrigin = () =>
       /^https:\/\/www\.youtube\.com(\/|$)/.test(String(window.location.href || ''));
     const _origPushState = history.pushState.bind(history);
@@ -3053,10 +3053,10 @@ function mountKcAuthWatcher() {
       // Force-hide all KickClip UI immediately
       try {
         const ids = [
-          'blink-highlight-overlay',
-          'blink-fullpage-highlight-overlay',
-          'blink-status-badge-page',
-          'blink-status-badge-core',
+          'kickclip-highlight-overlay',
+          'kickclip-fullpage-highlight-overlay',
+          'kickclip-status-badge-page',
+          'kickclip-status-badge-core',
         ];
         for (const id of ids) {
           const el = document.getElementById(id);

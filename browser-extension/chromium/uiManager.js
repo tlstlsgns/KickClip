@@ -6,10 +6,10 @@
 import { state } from './stateLite.js';
 import { BRAND } from './brandConfig.js';
 
-const PURPLE_OVERLAY_ID = 'blink-highlight-overlay';
-const FULLPAGE_OVERLAY_ID = 'blink-fullpage-highlight-overlay';
-const PAGE_BADGE_ID = 'blink-status-badge-page';
-const CORE_BADGE_ID = 'blink-status-badge-core';
+const PURPLE_OVERLAY_ID = 'kickclip-highlight-overlay';
+const FULLPAGE_OVERLAY_ID = 'kickclip-fullpage-highlight-overlay';
+const PAGE_BADGE_ID = 'kickclip-status-badge-page';
+const CORE_BADGE_ID = 'kickclip-status-badge-core';
 
 // ── Debug flag ────────────────────────────────────────────────────────────
 // Set to true to show ItemMap candidate outlines (green/red/blue) for debugging.
@@ -28,7 +28,7 @@ const BORDER_SPEED_PX_PER_MS = 0.4; // px per ms — keeps rotation speed consis
 function createBorderSvg(suffix) {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('id', `blink-border-svg-${suffix}`);
+  svg.setAttribute('id', `kickclip-border-svg-${suffix}`);
   svg.style.cssText = `
     position: absolute;
     top: 0; left: 0;
@@ -41,7 +41,7 @@ function createBorderSvg(suffix) {
 
   // radialGradient — white center → transparent edge
   const grad = document.createElementNS(ns, 'radialGradient');
-  grad.setAttribute('id', `blink-rg-${suffix}`);
+  grad.setAttribute('id', `kickclip-rg-${suffix}`);
   const stop1 = document.createElementNS(ns, 'stop');
   stop1.setAttribute('offset', '0%');
   stop1.setAttribute('stop-color', 'white');
@@ -53,17 +53,17 @@ function createBorderSvg(suffix) {
 
   // mask with ellipse
   const mask = document.createElementNS(ns, 'mask');
-  mask.setAttribute('id', `blink-mask-${suffix}`);
+  mask.setAttribute('id', `kickclip-mask-${suffix}`);
   const ellipse = document.createElementNS(ns, 'ellipse');
-  ellipse.setAttribute('id', `blink-ellipse-${suffix}`);
+  ellipse.setAttribute('id', `kickclip-ellipse-${suffix}`);
   ellipse.setAttribute('rx', '120');
   ellipse.setAttribute('ry', '120');
-  ellipse.setAttribute('fill', `url(#blink-rg-${suffix})`);
+  ellipse.setAttribute('fill', `url(#kickclip-rg-${suffix})`);
   mask.appendChild(ellipse);
 
   // glow filter
   const filter = document.createElementNS(ns, 'filter');
-  filter.setAttribute('id', `blink-glow-${suffix}`);
+  filter.setAttribute('id', `kickclip-glow-${suffix}`);
   filter.setAttribute('x', '-50%');
   filter.setAttribute('y', '-50%');
   filter.setAttribute('width', '200%');
@@ -80,34 +80,34 @@ function createBorderSvg(suffix) {
 
   // back stroke — always-visible thin border
   const backRect = document.createElementNS(ns, 'rect');
-  backRect.setAttribute('id', `blink-back-${suffix}`);
+  backRect.setAttribute('id', `kickclip-back-${suffix}`);
   backRect.setAttribute('fill', 'transparent');
   backRect.setAttribute('stroke-width', '1.5');
   svg.appendChild(backRect);
 
   // path — used only for getPointAtLength() calculations (invisible)
   const path = document.createElementNS(ns, 'path');
-  path.setAttribute('id', `blink-path-${suffix}`);
+  path.setAttribute('id', `kickclip-path-${suffix}`);
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke', 'none');
   svg.appendChild(path);
 
   // front rect — glow stroke with mask
   const frontRect = document.createElementNS(ns, 'rect');
-  frontRect.setAttribute('id', `blink-front-${suffix}`);
+  frontRect.setAttribute('id', `kickclip-front-${suffix}`);
   frontRect.setAttribute('fill', 'transparent');
   frontRect.setAttribute('stroke-width', '6');
-  frontRect.setAttribute('filter', `url(#blink-glow-${suffix})`);
-  frontRect.setAttribute('mask', `url(#blink-mask-${suffix})`);
+  frontRect.setAttribute('filter', `url(#kickclip-glow-${suffix})`);
+  frontRect.setAttribute('mask', `url(#kickclip-mask-${suffix})`);
   svg.appendChild(frontRect);
 
   return svg;
 }
 
 function updateBorderSvg(suffix, width, height, radius) {
-  const backRect = findKCElement(`blink-back-${suffix}`);
-  const frontRect = findKCElement(`blink-front-${suffix}`);
-  const path = findKCElement(`blink-path-${suffix}`);
+  const backRect = findKCElement(`kickclip-back-${suffix}`);
+  const frontRect = findKCElement(`kickclip-front-${suffix}`);
+  const path = findKCElement(`kickclip-path-${suffix}`);
   if (!backRect || !frontRect || !path) return 0;
 
   const r = Math.min(radius, width / 2, height / 2);
@@ -136,7 +136,7 @@ function updateBorderSvg(suffix, width, height, radius) {
   // Return the computed totalLength so callers can pass it to startBorderAnimation()
   // without an additional getTotalLength() call.
   let computedLength = 0;
-  const ellipse = findKCElement(`blink-ellipse-${suffix}`);
+  const ellipse = findKCElement(`kickclip-ellipse-${suffix}`);
   if (ellipse) {
     try {
       computedLength = path.getTotalLength();
@@ -149,8 +149,8 @@ function updateBorderSvg(suffix, width, height, radius) {
 }
 
 function startBorderAnimation(suffix, overlayEl, onFrame, cachedLength = 0) {
-  const ellipse = findKCElement(`blink-ellipse-${suffix}`);
-  const path = findKCElement(`blink-path-${suffix}`);
+  const ellipse = findKCElement(`kickclip-ellipse-${suffix}`);
+  const path = findKCElement(`kickclip-path-${suffix}`);
   if (!ellipse || !path) return null;
 
   // Use the pre-computed length from updateBorderSvg() to avoid a redundant
@@ -271,51 +271,51 @@ export function findKCElement(id) {
  */
 function buildOverlayStyleElement() {
   const style = document.createElement('style');
-  style.id = 'blink-overlay-styles';
+  style.id = 'kickclip-overlay-styles';
   style.textContent = `
 /* ── CoreHighlight SVG stroke colors ── */
-#blink-highlight-overlay #blink-back-core,
-#blink-highlight-overlay #blink-front-core {
+#kickclip-highlight-overlay #kickclip-back-core,
+#kickclip-highlight-overlay #kickclip-front-core {
   stroke: ${BRAND.KEY_COLOR_HEX}; /* default: unsaved */
 }
-#blink-highlight-overlay.saved #blink-back-core,
-#blink-highlight-overlay.saved #blink-front-core,
-#blink-highlight-overlay.shutter-success #blink-back-core,
-#blink-highlight-overlay.shutter-success #blink-front-core {
+#kickclip-highlight-overlay.saved #kickclip-back-core,
+#kickclip-highlight-overlay.saved #kickclip-front-core,
+#kickclip-highlight-overlay.shutter-success #kickclip-back-core,
+#kickclip-highlight-overlay.shutter-success #kickclip-front-core {
   stroke: rgb(34, 197, 94); /* green */
 }
-#blink-highlight-overlay.shutter-error #blink-back-core,
-#blink-highlight-overlay.shutter-error #blink-front-core {
+#kickclip-highlight-overlay.shutter-error #kickclip-back-core,
+#kickclip-highlight-overlay.shutter-error #kickclip-front-core {
   stroke: rgb(239, 68, 68); /* red */
 }
 
 /* ── FullPageHighlight SVG stroke colors ── */
-#blink-fullpage-highlight-overlay #blink-back-page,
-#blink-fullpage-highlight-overlay #blink-front-page {
+#kickclip-fullpage-highlight-overlay #kickclip-back-page,
+#kickclip-fullpage-highlight-overlay #kickclip-front-page {
   stroke: ${BRAND.KEY_COLOR_HEX}; /* default: unsaved */
 }
-#blink-fullpage-highlight-overlay.saved #blink-back-page,
-#blink-fullpage-highlight-overlay.saved #blink-front-page,
-#blink-fullpage-highlight-overlay.shutter-success #blink-back-page,
-#blink-fullpage-highlight-overlay.shutter-success #blink-front-page {
+#kickclip-fullpage-highlight-overlay.saved #kickclip-back-page,
+#kickclip-fullpage-highlight-overlay.saved #kickclip-front-page,
+#kickclip-fullpage-highlight-overlay.shutter-success #kickclip-back-page,
+#kickclip-fullpage-highlight-overlay.shutter-success #kickclip-front-page {
   stroke: rgb(34, 197, 94); /* green */
 }
-#blink-fullpage-highlight-overlay.shutter-error #blink-back-page,
-#blink-fullpage-highlight-overlay.shutter-error #blink-front-page {
+#kickclip-fullpage-highlight-overlay.shutter-error #kickclip-back-page,
+#kickclip-fullpage-highlight-overlay.shutter-error #kickclip-front-page {
   stroke: rgb(239, 68, 68); /* red */
 }
 
 /* ── StatusBadge colors ── */
-#blink-status-badge-page,
-#blink-status-badge-core {
+#kickclip-status-badge-page,
+#kickclip-status-badge-core {
   background: ${BRAND.KEY_COLOR_HEX};
 }
-#blink-status-badge-page.shutter-success,
-#blink-status-badge-core.shutter-success {
+#kickclip-status-badge-page.shutter-success,
+#kickclip-status-badge-core.shutter-success {
   background: rgb(34, 197, 94);
 }
-#blink-status-badge-page.shutter-error,
-#blink-status-badge-core.shutter-error {
+#kickclip-status-badge-page.shutter-error,
+#kickclip-status-badge-core.shutter-error {
   background: rgb(239, 68, 68);
 }
 
@@ -330,7 +330,7 @@ function injectKickClipOverlayStyles() {
   try {
     const shadowRoot = getKCShadowRoot();
     // Guard: shadow root may not be ready in early edge cases.
-    if (shadowRoot && !shadowRoot.getElementById('blink-overlay-styles')) {
+    if (shadowRoot && !shadowRoot.getElementById('kickclip-overlay-styles')) {
       const shadowStyle = buildOverlayStyleElement();
       shadowRoot.appendChild(shadowStyle);
     }
@@ -419,8 +419,8 @@ export function updateFullPageHighlightClass(isSaved, shutterState = 'none', for
   } catch (e) {}
 }
 
-const GREEN_LAYER_ID = 'blink-green-candidate-layer';
-const METADATA_TOOLTIP_ID = 'blink-metadata-tooltip';
+const GREEN_LAYER_ID = 'kickclip-green-candidate-layer';
+const METADATA_TOOLTIP_ID = 'kickclip-metadata-tooltip';
 const EVIDENCE_TYPE_INTERACTION = 'B';
 const EVIDENCE_TYPE_C = 'C';
 
@@ -465,7 +465,7 @@ function ensurePurpleOverlay() {
     display: block;
     opacity: 0;
   `;
-  el.classList.add('blink-default');
+  el.classList.add('kickclip-default');
   const borderSvg = createBorderSvg('core');
   el.appendChild(borderSvg);
   getKCShadowRoot().appendChild(el);
