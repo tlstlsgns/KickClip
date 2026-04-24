@@ -50,19 +50,36 @@
       line-height: 1.6;
       margin: 0 0 32px;
     }
-    button#pick {
-      background: var(--brand);
-      color: white;
-      border: none;
-      padding: 14px 32px;
-      font-size: 16px;
+    .kc-picker-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      align-items: center;
+    }
+    .kc-picker-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 20px;
+      font-size: 15px;
       font-weight: 500;
       border-radius: 8px;
       cursor: pointer;
-      transition: opacity 0.15s;
+      transition: opacity 0.15s, transform 0.1s;
+      border: 1px solid var(--border);
     }
-    button#pick:hover { opacity: 0.9; }
-    button#pick:disabled { opacity: 0.5; cursor: not-allowed; }
+    .kc-picker-btn:hover { opacity: 0.85; }
+    .kc-picker-btn:active { transform: translateY(1px); }
+    .kc-picker-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .kc-picker-btn-local {
+      background: var(--brand);
+      color: white;
+      border-color: var(--brand);
+    }
+    .kc-picker-btn-drive {
+      background: var(--bg);
+      color: var(--fg);
+    }
     #status {
       margin-top: 24px;
       min-height: 24px;
@@ -76,10 +93,25 @@
   <div class="container">
     <h1>저장 폴더 설정</h1>
     <p>KickClip이 파일을 저장할 폴더를 선택하세요.<br><small style="opacity:0.7">※ Desktop, Downloads 같은 시스템 폴더는 Chrome 보안 정책으로 선택할 수 없습니다.</small></p>
-    <button type="button" id="pick">📁 폴더 선택</button>
+    <div class="kc-picker-buttons">
+      <button type="button" id="pick" class="kc-picker-btn kc-picker-btn-local">
+        <span aria-hidden="true">📁</span>
+        <span>폴더 선택</span>
+      </button>
+      <button type="button" id="pick-drive" class="kc-picker-btn kc-picker-btn-drive">
+        <svg width="18" height="18" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+          <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47"/>
+          <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
+          <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+          <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+          <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+        </svg>
+        <span>Google Drive</span>
+      </button>
+    </div>
     <div id="status"></div>
   </div>
-  <script src="config.js"></script>
   <script type="module" src="picker.js"></script>
 </body>
 </html>

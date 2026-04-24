@@ -36,7 +36,13 @@ import {
   refreshPrimaryHandleCache,
   writeItemToHandle,
   saveItemViaDownloads,
+  buildDriveUploadPayload,
 } from './upload.js';
+import {
+  getDestination,
+  setDestination,
+  clearDestination,
+} from './uploadStorage.js';
 
 const KC_AUTO_STORAGE_KEY = 'kc_upload_auto_enabled';
 
@@ -86,29 +92,48 @@ async function setAutoEnabled(value) {
 }
 
 /**
- * Updates the Dir container UI to reflect current folder handle and Auto state.
- * @param {boolean} autoEnabled
+ * Updates the Dir container UI to reflect destination preference.
  */
-function _refreshDirContainer(autoEnabled) {
+async function _refreshDirContainer(autoEnabled) {
   const btn = document.getElementById('kc-dir-folder-btn');
   const label = document.getElementById('kc-dir-folder-label');
   const autoBox = document.getElementById('kc-dir-auto-checkbox');
   if (!btn || !label || !autoBox) return;
 
-  const handle = getPrimaryHandleForGesture();
-  if (handle && handle.name) {
-    label.textContent = handle.name;
-    btn.classList.add('kc-dir-configured');
-    btn.classList.remove('kc-dir-unconfigured', 'kc-dir-missing');
-    btn.title = `저장 폴더: ${handle.name} (클릭하여 변경)`;
-  } else {
-    label.textContent = '저장 위치 선택';
-    btn.classList.remove('kc-dir-configured', 'kc-dir-missing');
-    btn.classList.add('kc-dir-unconfigured');
-    btn.title = '저장 폴더를 선택하세요';
-  }
+  try {
+    const destination = await getDestination();
 
-  autoBox.checked = Boolean(autoEnabled);
+    btn.classList.remove(
+      'kc-dir-unconfigured',
+      'kc-dir-configured',
+      'kc-dir-missing',
+      'kc-dir-drive-configured'
+    );
+
+    if (destination && destination.type === 'drive') {
+      const parent = destination.driveParentFolderName || '';
+      const child = destination.driveFolderName || 'kickclip_files';
+      const fullPath = parent ? `${parent}/${child}` : child;
+      label.textContent = fullPath;
+      btn.title = `Google Drive: ${fullPath}`;
+      btn.classList.add('kc-dir-configured', 'kc-dir-drive-configured');
+    } else {
+      const handle = getPrimaryHandleForGesture();
+      if (handle) {
+        label.textContent = handle.name;
+        btn.title = `로컬 폴더: ${handle.name}`;
+        btn.classList.add('kc-dir-configured');
+      } else {
+        label.textContent = '저장 위치 선택';
+        btn.title = '저장 폴더를 선택하세요';
+        btn.classList.add('kc-dir-unconfigured');
+      }
+    }
+
+    autoBox.checked = Boolean(autoEnabled);
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] _refreshDirContainer error:', e);
+  }
 }
 
 function _markDirFolderMissing(folderName) {
@@ -158,8 +183,17 @@ async function handleAutoCheckboxChange(e) {
   } catch (e) {
     console.log('[KICKCLIP-LOG] preloadPrimaryHandle failed:', e);
   }
+  try {
+    const existingDest = await getDestination();
+    const cachedHandle = getPrimaryHandleForGesture();
+    if (!existingDest && cachedHandle) {
+      await setDestination({ type: 'local' });
+    }
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] destination backfill failed:', e);
+  }
   const auto = await getAutoEnabled();
-  _refreshDirContainer(auto);
+  await _refreshDirContainer(auto);
 })();
 
 // ── Firebase config ───────────────────────────────────────────────────────────
@@ -1398,18 +1432,170 @@ function openUploadPopover(item, anchorBtn) {
   openKcUploadPopover(anchorBtn, item);
 }
 
-function handleUploadButtonClick(item, anchorBtn) {
-  (async () => {
-    const autoEnabled = await getAutoEnabled();
-    const handle = getPrimaryHandleForGesture();
+/**
+ * Upload an item directly to the configured Drive kickclip_files folder.
+ * Called when destination.type === 'drive' and Auto is ON.
+ */
+async function handleAutoDriveUpload(item, destination, anchorBtn) {
+  try {
+    showKcToast('Google Drive에 업로드 중...');
 
-    if (autoEnabled && handle) {
+    const payload = await buildDriveUploadPayload(item);
+    if (!payload.ok) {
+      console.log('[KICKCLIP-LOG] handleAutoDriveUpload build error:', payload);
+      flashUploadMark(anchorBtn, false);
+      showKcToast(`업로드 준비 실패: ${payload.message || 'Unknown'}`, 'error');
+      return;
+    }
+
+    const uploadResp = await chrome.runtime.sendMessage({
+      action: 'drive-upload-file',
+      folderId: destination.driveFolderId,
+      desiredName: payload.desiredName,
+      mimeType: payload.mimeType,
+      contentBase64: payload.contentBase64,
+    });
+
+    if (!uploadResp?.ok) {
+      flashUploadMark(anchorBtn, false);
+      if (uploadResp?.reason === 'folder-missing') {
+        console.log('[KICKCLIP-LOG] Drive folder missing, clearing destination');
+        await clearDestination();
+        await _refreshDirContainer(await getAutoEnabled());
+        showKcToast('Drive 폴더를 찾을 수 없습니다. 다시 설정해주세요.', 'error');
+        return;
+      }
+      showKcToast(`업로드 실패: ${uploadResp?.message || 'Unknown'}`, 'error');
+      return;
+    }
+
+    flashUploadMark(anchorBtn, true);
+    showKcToast(`✓ "${payload.desiredName}" 업로드 완료`, 'success');
+  } catch (e) {
+    flashUploadMark(anchorBtn, false);
+    console.log('[KICKCLIP-LOG] handleAutoDriveUpload error:', e);
+    showKcToast(`업로드 실패: ${e?.message || String(e)}`, 'error');
+  }
+}
+
+/**
+ * Set up Drive destination: OAuth -> ensure kickclip_files in My Drive
+ * root -> save destination. Caller decides whether to auto-upload after.
+ *
+ * @returns {Promise<{ ok: true, destination: { type:'drive', driveFolderId:string, driveFolderName:string, driveParentFolderId:string, driveParentFolderName:string } } | { ok: false, reason: 'no-token' | 'api-error' | 'save-failed', message?: string }>}
+ */
+async function setupDriveDestination() {
+  try {
+    const tokenResp = await chrome.runtime.sendMessage({
+      action: 'get-google-oauth-token',
+      scopes: [
+        'openid',
+        'email',
+        'profile',
+        'https://www.googleapis.com/auth/drive.file',
+      ],
+    });
+    if (!tokenResp?.token) {
+      return { ok: false, reason: 'no-token', message: tokenResp?.error || 'No token' };
+    }
+
+    const ensureResp = await chrome.runtime.sendMessage({
+      action: 'drive-ensure-folder',
+      parentFolderId: 'root',
+      parentFolderName: '내 드라이브',
+    });
+    if (!ensureResp?.ok) {
+      return { ok: false, reason: 'api-error', message: ensureResp?.message || 'Drive folder setup failed' };
+    }
+
+    const destination = {
+      type: 'drive',
+      driveFolderId: ensureResp.folderId,
+      driveFolderName: ensureResp.folderName,
+      driveParentFolderId: ensureResp.parentFolderId,
+      driveParentFolderName: ensureResp.parentFolderName,
+    };
+    const saved = await setDestination(destination);
+    if (!saved) {
+      return { ok: false, reason: 'save-failed', message: 'Could not save destination' };
+    }
+
+    return { ok: true, destination };
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] setupDriveDestination error:', e);
+    return { ok: false, reason: 'api-error', message: e?.message || String(e) };
+  }
+}
+
+/**
+ * Popover 'Google Drive' handler. Direct flow (Phase U3.3c UX hotfix):
+ * if configured, uploads immediately; if not, sets up Drive destination
+ * inline and uploads - no picker popup intermediate.
+ */
+async function handleDriveUpload(item, anchorBtn) {
+  try {
+    let destination = await getDestination();
+
+    if (!destination || destination.type !== 'drive') {
+      showKcToast('Google Drive 설정 중...');
+      const setup = await setupDriveDestination();
+      if (!setup.ok) {
+        showKcToast(`Drive 설정 실패: ${setup.message || setup.reason}`, 'error');
+        return;
+      }
+      destination = setup.destination;
+
+      const autoCheckbox = document.getElementById('kc-dir-auto-checkbox');
+      if (autoCheckbox && !autoCheckbox.checked) {
+        autoCheckbox.checked = true;
+        await setAutoEnabled(true);
+      }
+      await _refreshDirContainer(await getAutoEnabled());
+    }
+
+    await handleAutoDriveUpload(item, destination, anchorBtn);
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] handleDriveUpload error:', e);
+    showKcToast(`업로드 실패: ${e?.message || String(e)}`, 'error');
+  }
+}
+
+async function handleUploadButtonClick(item, anchorBtn) {
+  try {
+    const destination = await getDestination();
+    const autoEnabled = await getAutoEnabled();
+
+    if (!destination) {
+      openKcUploadPopover(anchorBtn, item);
+      return;
+    }
+
+    if (!autoEnabled) {
+      openKcUploadPopover(anchorBtn, item);
+      return;
+    }
+
+    if (destination.type === 'local') {
+      const handle = getPrimaryHandleForGesture();
+      if (!handle) {
+        _markDirFolderMissing();
+        openKcUploadPopover(anchorBtn, item);
+        return;
+      }
       handleAutoPathUpload(item, anchorBtn, handle);
       return;
     }
 
-    openUploadPopover(item, anchorBtn);
-  })();
+    if (destination.type === 'drive') {
+      await handleAutoDriveUpload(item, destination, anchorBtn);
+      return;
+    }
+
+    openKcUploadPopover(anchorBtn, item);
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] handleUploadButtonClick error:', e);
+    openKcUploadPopover(anchorBtn, item);
+  }
 }
 
 // ── Upload destination popover (Phase U1 — UI only, no file I/O) ──────────────
@@ -1450,7 +1636,7 @@ function ensureKcUploadPopover() {
     </button>
   `;
   div.querySelectorAll('.kc-upload-popover-item').forEach((itemBtn) => {
-    itemBtn.addEventListener('click', (e) => {
+    itemBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const dest = itemBtn.getAttribute('data-destination') || '';
       const item = div._kcItem;
@@ -1460,8 +1646,7 @@ function ensureKcUploadPopover() {
       if (dest === 'local') {
         handleLocalUpload(item, anchorBtn);
       } else if (dest === 'drive') {
-        const itemId = item.id || getItemId(item);
-        console.log('[KICKCLIP-LOG] Upload requested:', { destination: dest, itemId, item });
+        await handleDriveUpload(item, anchorBtn);
       }
     });
   });
@@ -2466,12 +2651,30 @@ if (chrome?.runtime?.onMessage) {
       (async () => {
         try {
           await refreshPrimaryHandleCache();
+          await setDestination({ type: 'local' });
           await setAutoEnabled(true);
-          _refreshDirContainer(true);
+          await _refreshDirContainer(true);
           showKcToast(`저장 폴더 설정 완료: ${message.folderName || ''}`, 'success');
         } catch (e) {
           console.log('[KICKCLIP-LOG] picker handle ready processing failed:', e);
           showKcToast('폴더 설정을 저장하지 못했습니다.', 'error');
+        }
+      })();
+      return;
+    }
+
+    if (message.action === 'kc-picker-drive-ready') {
+      (async () => {
+        try {
+          await _refreshDirContainer(await getAutoEnabled());
+          const autoCheckbox = document.getElementById('kc-dir-auto-checkbox');
+          if (autoCheckbox && !autoCheckbox.checked) {
+            autoCheckbox.checked = true;
+            await setAutoEnabled(true);
+          }
+          showKcToast('✓ Google Drive 폴더가 설정되었습니다.');
+        } catch (e) {
+          console.log('[KICKCLIP-LOG] kc-picker-drive-ready handler error:', e);
         }
       })();
       return;

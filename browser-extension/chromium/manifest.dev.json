@@ -88,8 +88,7 @@
         "upload.js",
         "uploadStorage.js",
         "picker.html",
-        "picker.js",
-        "vendor/gapi.js"
+        "picker.js"
       ],
       "matches": [
         "<all_urls>"
@@ -118,7 +117,7 @@
     ]
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' data: https: http://localhost:3000 http://localhost:3001; frame-src 'self' https://docs.google.com https://accounts.google.com https://*.google.com;"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' data: https: http://localhost:3000 http://localhost:3001;"
   },
   "action": {
     "default_title": "KickClip",

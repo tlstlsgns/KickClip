@@ -471,3 +471,78 @@ export async function writeItemToHandle(handle, item) {
     return { ok: false, reason: 'generic', message: e?.message || String(e) };
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Drive upload helper (Phase U3.3b)
+// Builds the request payload for background.js drive-upload-file:
+//   desiredName, mimeType, contentBase64
+// Reuses existing sanitize/filename pipeline + image blob fetch.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Convert a Blob to base64 string (no data: prefix).
+ * @param {Blob} blob
+ * @returns {Promise<string>}
+ */
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('FileReader did not return string'));
+        return;
+      }
+      const commaIdx = result.indexOf(',');
+      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('FileReader error'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Build a Drive upload payload for a given DataCard item. Does NOT
+ * send to Drive — returns { desiredName, mimeType, contentBase64 } for
+ * the caller to pass to background via drive-upload-file message.
+ *
+ * Naming and sanitization match the local upload pipeline.
+ *
+ * @param {object} item
+ * @returns {Promise<{ ok: true, desiredName: string, mimeType: string, contentBase64: string }
+ *   | { ok: false, reason: 'generic', message: string }>}
+ */
+export async function buildDriveUploadPayload(item) {
+  try {
+    const category = (item.category || '').trim();
+    let blob;
+    let ext;
+    let mimeType;
+
+    if (category === 'Image') {
+      const imgUrl = (item.img_url || '').trim();
+      if (!imgUrl) {
+        return { ok: false, reason: 'generic', message: 'No image URL' };
+      }
+      blob = await fetchImageAsBlob(imgUrl);
+      ext = inferImageExtension(imgUrl, blob);
+      mimeType = blob.type || (ext === 'jpg' ? 'image/jpeg' : `image/${ext}`);
+    } else {
+      const md = formatItemAsMarkdown(item);
+      blob = new Blob([md], { type: 'text/markdown' });
+      ext = 'md';
+      mimeType = 'text/markdown';
+    }
+
+    const rawTitle = (item.title || '').trim();
+    let base = rawTitle ? rawTitle : fallbackFilenameBase(item);
+    base = sanitizeFilename(truncateFilenameBase(base));
+    if (!base) base = sanitizeFilename(fallbackFilenameBase(item));
+    const desiredName = `${base}.${ext}`;
+
+    const contentBase64 = await blobToBase64(blob);
+    return { ok: true, desiredName, mimeType, contentBase64 };
+  } catch (e) {
+    return { ok: false, reason: 'generic', message: e?.message || String(e) };
+  }
+}
