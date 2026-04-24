@@ -27,6 +27,7 @@ import {
   query,
   orderBy,
   onSnapshot,
+  doc,
 } from './firebase-bundle.js';
 
 import {
@@ -225,6 +226,110 @@ const firebaseApp = getApps().length === 0
 
 const auth = getAuth(firebaseApp);
 const db   = getFirestore(firebaseApp);
+
+/** @param {unknown} v */
+function _kcFirestorePrimitiveField(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'string') return { stringValue: v };
+  return { stringValue: String(v) };
+}
+
+/**
+ * One read of a document ref via onSnapshot (getDoc is not exported from firebase-bundle.js).
+ * @param {*} docRef
+ */
+function _kcFirestoreSnapshotOnce(docRef) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const unsub = onSnapshot(
+      docRef,
+      (snap) => {
+        if (settled) return;
+        settled = true;
+        try {
+          unsub();
+        } catch (_) {}
+        resolve(snap);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        try {
+          unsub();
+        } catch (_) {}
+        reject(err);
+      }
+    );
+  });
+}
+
+/**
+ * Commit a user profile write via Firestore REST (setDoc/updateDoc/serverTimestamp are not in firebase-bundle.js).
+ */
+async function _kcFirestoreCommitUserProfile(projectId, idToken, documentName, fields, transforms) {
+  const fieldPaths = [...Object.keys(fields), ...transforms.map((t) => t.fieldPath)];
+  const body = {
+    writes: [
+      {
+        update: { name: documentName, fields },
+        updateMask: { fieldPaths },
+        updateTransforms: transforms,
+      },
+    ],
+  };
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:commit`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Firestore commit ${res.status}: ${text}`);
+  }
+}
+
+/**
+ * Upsert the current user's profile document at users/{uid}.
+ * Idempotent — safe to call on every sign-in / auth state change.
+ * If the document doesn't exist, creates it with createdAt set to
+ * the server timestamp. If it exists, only updates non-createdAt
+ * fields (preserving original creation timestamp).
+ *
+ * @param {*} user
+ */
+async function upsertUserProfile(user) {
+  if (!user?.uid) return;
+  try {
+    const userRef = doc(db, 'users', user.uid);
+    const snap = await _kcFirestoreSnapshotOnce(userRef);
+    const idToken = await user.getIdToken();
+    const projectId = FIREBASE_CONFIG.projectId;
+    const documentName = `projects/${projectId}/databases/(default)/documents/users/${user.uid}`;
+    const provider =
+      (user.providerData && user.providerData[0] && user.providerData[0].providerId) || 'google.com';
+    const baseFields = {
+      uid: _kcFirestorePrimitiveField(user.uid),
+      email: _kcFirestorePrimitiveField(user.email ?? null),
+      displayName: _kcFirestorePrimitiveField(user.displayName ?? null),
+      photoURL: _kcFirestorePrimitiveField(user.photoURL ?? null),
+      emailVerified: { booleanValue: !!user.emailVerified },
+      provider: _kcFirestorePrimitiveField(provider),
+    };
+    const transforms = [{ fieldPath: 'lastLoginAt', setToServerValue: 'REQUEST_TIME' }];
+    if (!snap.exists()) {
+      transforms.push({ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' });
+    }
+    await _kcFirestoreCommitUserProfile(projectId, idToken, documentName, baseFields, transforms);
+  } catch (e) {
+    // Do not break sign-in flow on upsert failure
+    console.log('[KICKCLIP-LOG] upsertUserProfile error:', e);
+  }
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let currentUser        = null;
@@ -525,7 +630,8 @@ async function signInWithGoogle() {
     const credential = GoogleAuthProvider.credential(null, token);
 
     // 3. Sign in to Firebase
-    await signInWithCredential(auth, credential);
+    const userCredential = await signInWithCredential(auth, credential);
+    await upsertUserProfile(userCredential.user);
   } catch (err) {
     console.error('[Auth] Sign-in error:', err);
     showLoginError(err.message || 'Sign-in failed. Please try again.');
@@ -643,6 +749,7 @@ function syncSavedUrlsToSession(items) {
 onAuthStateChanged(auth, async (user) => {
   currentUser = user;
   if (user) {
+    await upsertUserProfile(user);
     // Always sync userId to storage, regardless of Side Panel open state
     if (chrome?.storage?.local) {
       chrome.storage.local.set({ kickclipUserId: user.uid }).catch(() => {});
