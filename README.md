@@ -187,13 +187,82 @@ KickClip/
 
 ## Usage
 
-See [USAGE_GUIDE.md](./USAGE_GUIDE.md) for detailed usage instructions.
+### Getting Started
 
-Or briefly:
+1. **Install the extension** from the Chrome Web Store (pending
+   approval) or load the unpacked build for development (see
+   [Development Setup](#development-setup) above).
 
-1. Press `Cmd+Shift+S` / `Ctrl+Shift+S` on any page
-2. Configure save destination (local folder or Google Drive) on first use
-3. Manage saved items via the side panel (click the KickClip icon)
+2. **Sign in with Google** — click the KickClip icon to open the
+   side panel, then sign in with your Google account.
+
+3. **Choose a save destination** when prompted:
+   - **Local folder**: select a folder on your computer (via File
+     System Access API)
+   - **Google Drive**: automatically creates a `kickclip_files`
+     folder in your Drive root
+
+### Saving Content
+
+**Keyboard shortcut** (recommended):
+
+- Press `Cmd+Shift+S` (Mac) or `Ctrl+Shift+S` (Windows/Linux) on any
+  webpage to save it.
+- If you're hovering over an image when you press the shortcut, the
+  image will be saved instead of the page URL.
+
+**Extension icon**:
+
+- Click the KickClip icon in your Chrome toolbar to open the side
+  panel and browse saved items.
+
+### Managing Saved Items
+
+Saved items are organized by auto-detected category in the side panel:
+
+- **Article** — news articles, blog posts
+- **Image** — saved images
+- **Video** — YouTube, Instagram Reels, etc.
+- **Mail** — email-style content
+- **Product** — shopping pages
+- **Other** — uncategorized content
+
+Click any item card to view its metadata, open the original URL, or
+navigate to the saved file.
+
+### Auto Upload
+
+When "Auto" is enabled in the side panel, pressing the save shortcut
+automatically uploads to your configured destination without prompting.
+Disable "Auto" if you want a destination picker (local folder or Google
+Drive) each time.
+
+### Switching Save Destinations
+
+Click the folder icon in the Dir container at the top of the side
+panel to change destinations. The picker popup lets you switch between
+a local folder and Google Drive at any time.
+
+### Troubleshooting
+
+**Shortcut not working**:
+
+1. Go to `chrome://extensions/shortcuts`
+2. Find KickClip → "Save current URL or hovered image"
+3. Assign `⌘⇧S` (Mac) or `Ctrl+Shift+S` (Windows/Linux)
+
+**Sign-in issues**:
+
+- Ensure third-party cookies are allowed for Google domains
+- Sign out and back in via the side panel's account menu
+
+**Save failures**:
+
+- **Google Drive**: confirm your Google account granted Drive permission
+  during sign-in
+- **Local folder**: the selected folder must still exist and the
+  extension must retain File System Access permission (re-grant via
+  the folder picker if needed)
 
 ## Contributing
 
