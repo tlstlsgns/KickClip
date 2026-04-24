@@ -92,3 +92,74 @@ export async function clearPrimaryHandle() {
     } catch (_) {}
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Destination preference (Phase U3.3)
+// chrome.storage.local key: 'kc_upload_destination'
+//
+// Shape:
+//   null                    — unconfigured (Phase U2 fallback: check IDB handle)
+//   { type: 'local' }       — use IndexedDB primary handle (existing flow)
+//   {
+//     type: 'drive',
+//     driveFolderId: string,         // kickclip_files folder ID
+//     driveFolderName: string,       // 'kickclip_files'
+//     driveParentFolderId: string,   // picker-selected parent
+//     driveParentFolderName: string  // parent name (for UI display)
+//   }
+//
+// Local IDB handle is preserved when switching to Drive — lets user
+// revert to previous local folder without re-picking.
+// ─────────────────────────────────────────────────────────────
+
+const DESTINATION_KEY = 'kc_upload_destination';
+
+/**
+ * Get current upload destination preference.
+ * @returns {Promise<{type:'local'}|{type:'drive', driveFolderId:string, driveFolderName:string, driveParentFolderId:string, driveParentFolderName:string}|null>}
+ */
+export async function getDestination() {
+  try {
+    const result = await chrome.storage.local.get(DESTINATION_KEY);
+    return result[DESTINATION_KEY] || null;
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] getDestination error:', e);
+    return null;
+  }
+}
+
+/**
+ * Set upload destination preference.
+ * @param {{type:'local'}|{type:'drive', driveFolderId:string, driveFolderName:string, driveParentFolderId:string, driveParentFolderName:string}} dest
+ * @returns {Promise<boolean>} true on success
+ */
+export async function setDestination(dest) {
+  try {
+    if (!dest || !dest.type || (dest.type !== 'local' && dest.type !== 'drive')) {
+      throw new Error('Invalid destination shape');
+    }
+    if (dest.type === 'drive') {
+      if (!dest.driveFolderId || !dest.driveParentFolderId) {
+        throw new Error('Drive destination missing required IDs');
+      }
+    }
+    await chrome.storage.local.set({ [DESTINATION_KEY]: dest });
+    return true;
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] setDestination error:', e);
+    return false;
+  }
+}
+
+/**
+ * Clear destination preference. Does NOT clear IndexedDB handle.
+ */
+export async function clearDestination() {
+  try {
+    await chrome.storage.local.remove(DESTINATION_KEY);
+    return true;
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] clearDestination error:', e);
+    return false;
+  }
+}

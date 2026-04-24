@@ -956,6 +956,241 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
   }
 
+  // Phase U3.3: ensure kickclip_files subfolder exists in selected parent
+  // on Google Drive. Searches for app-owned 'kickclip_files' within parent;
+  // reuses if found (drive.file scope lets app see only folders it created),
+  // creates new otherwise.
+  //
+  // Request: { action: 'drive-ensure-folder', parentFolderId, parentFolderName? }
+  // Response: { ok: true, folderId, folderName, parentFolderId, parentFolderName }
+  //           | { ok: false, reason: 'no-token' | 'api-error', message, status? }
+  if (request.action === 'drive-ensure-folder') {
+    (async () => {
+      try {
+        const parentFolderId = request.parentFolderId;
+        if (!parentFolderId) {
+          sendResponse({ ok: false, reason: 'api-error', message: 'parentFolderId required' });
+          return;
+        }
+        const tokenResp = await new Promise((resolve) => {
+          chrome.identity.getAuthToken(
+            {
+              interactive: true,
+              scopes: [
+                'openid',
+                'email',
+                'profile',
+                'https://www.googleapis.com/auth/drive.file',
+              ],
+            },
+            (token) => {
+              if (chrome.runtime.lastError || !token) {
+                resolve({ token: null, error: chrome.runtime.lastError?.message });
+              } else {
+                resolve({ token });
+              }
+            }
+          );
+        });
+        if (!tokenResp.token) {
+          sendResponse({ ok: false, reason: 'no-token', message: tokenResp.error || 'No token' });
+          return;
+        }
+
+        const query = [
+          "name='kickclip_files'",
+          `'${parentFolderId}' in parents`,
+          "mimeType='application/vnd.google-apps.folder'",
+          'trashed=false',
+        ].join(' and ');
+        const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=1`;
+        const searchResp = await fetch(searchUrl, {
+          headers: { Authorization: `Bearer ${tokenResp.token}` },
+        });
+        if (!searchResp.ok) {
+          const errText = await searchResp.text();
+          console.log('[KICKCLIP-LOG] drive-ensure-folder search error:', searchResp.status, errText);
+          sendResponse({
+            ok: false,
+            reason: 'api-error',
+            status: searchResp.status,
+            message: `Drive search failed: ${searchResp.status}`,
+          });
+          return;
+        }
+        const searchData = await searchResp.json();
+
+        if (Array.isArray(searchData.files) && searchData.files.length > 0) {
+          const found = searchData.files[0];
+          console.log('[KICKCLIP-LOG] drive-ensure-folder reused:', found.id);
+          sendResponse({
+            ok: true,
+            folderId: found.id,
+            folderName: found.name,
+            parentFolderId,
+            parentFolderName: request.parentFolderName || '',
+            reused: true,
+          });
+          return;
+        }
+
+        const createResp = await fetch('https://www.googleapis.com/drive/v3/files', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${tokenResp.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'kickclip_files',
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [parentFolderId],
+          }),
+        });
+        if (!createResp.ok) {
+          const errText = await createResp.text();
+          console.log('[KICKCLIP-LOG] drive-ensure-folder create error:', createResp.status, errText);
+          sendResponse({
+            ok: false,
+            reason: 'api-error',
+            status: createResp.status,
+            message: `Drive create failed: ${createResp.status}`,
+          });
+          return;
+        }
+        const created = await createResp.json();
+        console.log('[KICKCLIP-LOG] drive-ensure-folder created:', created.id);
+        sendResponse({
+          ok: true,
+          folderId: created.id,
+          folderName: created.name,
+          parentFolderId,
+          parentFolderName: request.parentFolderName || '',
+          reused: false,
+        });
+      } catch (e) {
+        console.log('[KICKCLIP-LOG] drive-ensure-folder exception:', e);
+        sendResponse({ ok: false, reason: 'api-error', message: e?.message || String(e) });
+      }
+    })();
+    return true; // async response
+  }
+
+  // Phase U3.3: upload a DataCard item to Drive's kickclip_files folder
+  // as a markdown (or image for Image category) file via multipart upload.
+  //
+  // Request: { action: 'drive-upload-file', item, folderId, desiredName, mimeType, contentBase64 }
+  // Response: { ok: true, fileId, fileName, webViewLink? }
+  //           | { ok: false, reason: 'no-token' | 'folder-missing' | 'api-error', message, status? }
+  if (request.action === 'drive-upload-file') {
+    (async () => {
+      try {
+        const { folderId, desiredName, mimeType, contentBase64 } = request;
+        if (!folderId || !desiredName || !mimeType || !contentBase64) {
+          sendResponse({ ok: false, reason: 'api-error', message: 'missing required fields' });
+          return;
+        }
+
+        const tokenResp = await new Promise((resolve) => {
+          chrome.identity.getAuthToken(
+            {
+              interactive: true,
+              scopes: [
+                'openid',
+                'email',
+                'profile',
+                'https://www.googleapis.com/auth/drive.file',
+              ],
+            },
+            (token) => {
+              if (chrome.runtime.lastError || !token) {
+                resolve({ token: null, error: chrome.runtime.lastError?.message });
+              } else {
+                resolve({ token });
+              }
+            }
+          );
+        });
+        if (!tokenResp.token) {
+          sendResponse({ ok: false, reason: 'no-token', message: tokenResp.error || 'No token' });
+          return;
+        }
+
+        const binaryString = atob(contentBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        const boundary = `kickclip_boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const metadata = {
+          name: desiredName,
+          parents: [folderId],
+          mimeType,
+        };
+        const metadataPart =
+          `--${boundary}\r\n` +
+          `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+          JSON.stringify(metadata) +
+          `\r\n`;
+        const dataPartHeader =
+          `--${boundary}\r\n` +
+          `Content-Type: ${mimeType}\r\n\r\n`;
+        const closing = `\r\n--${boundary}--`;
+
+        const encoder = new TextEncoder();
+        const metadataBytes = encoder.encode(metadataPart);
+        const dataHeaderBytes = encoder.encode(dataPartHeader);
+        const closingBytes = encoder.encode(closing);
+        const body = new Uint8Array(
+          metadataBytes.length + dataHeaderBytes.length + bytes.length + closingBytes.length
+        );
+        let offset = 0;
+        body.set(metadataBytes, offset); offset += metadataBytes.length;
+        body.set(dataHeaderBytes, offset); offset += dataHeaderBytes.length;
+        body.set(bytes, offset); offset += bytes.length;
+        body.set(closingBytes, offset);
+
+        const uploadResp = await fetch(
+          'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${tokenResp.token}`,
+              'Content-Type': `multipart/related; boundary=${boundary}`,
+            },
+            body,
+          }
+        );
+        if (!uploadResp.ok) {
+          const errText = await uploadResp.text();
+          console.log('[KICKCLIP-LOG] drive-upload-file error:', uploadResp.status, errText);
+          const reason = (uploadResp.status === 404 || uploadResp.status === 403)
+            ? 'folder-missing'
+            : 'api-error';
+          sendResponse({
+            ok: false,
+            reason,
+            status: uploadResp.status,
+            message: `Drive upload failed: ${uploadResp.status}`,
+          });
+          return;
+        }
+        const uploaded = await uploadResp.json();
+        console.log('[KICKCLIP-LOG] drive-upload-file success:', uploaded.id);
+        sendResponse({
+          ok: true,
+          fileId: uploaded.id,
+          fileName: uploaded.name,
+          webViewLink: uploaded.webViewLink || null,
+        });
+      } catch (e) {
+        console.log('[KICKCLIP-LOG] drive-upload-file exception:', e);
+        sendResponse({ ok: false, reason: 'api-error', message: e?.message || String(e) });
+      }
+    })();
+    return true; // async response
+  }
+
   if (request.action === 'get-naver-cookies') {
     chrome.cookies.getAll({ domain: '.naver.com' }, (cookies) => {
       if (chrome.runtime.lastError || !cookies?.length) {
