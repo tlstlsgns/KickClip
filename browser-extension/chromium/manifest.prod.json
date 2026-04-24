@@ -1,6 +1,5 @@
 {
   "manifest_version": 3,
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu8DlT+OvX4Noo9hFmSPeHjswg/udfCPEwsb0qfWd8FTcwe6dIgxHg607Tq5ZXO8F6x1w4cSGppPu3dr6UDGBMX5gSmdIUsBAxgTAAmlg/d4tRXIt36K1v8RZ8xLPOJKxtCUTwhAX4Vu9yHB8HD6e3YdBrFZ8ulcmc8QYhLAFdgWC5Toe96i66txcFNn7cuvBgBEJ+qNQhnOlHhwKTZGmQoXShZNyJboxT+Ii8ITaDMT5+ahwk61TswXgz/aWTnVLNUxkXnVIvudMuFfIYVUs1Wj8IA9JFNZyY6OZtm4IkNwiPaS0nP9Vzm66mHeOdZJeXIJvpFLmqS5nVchfuevdbwIDAQAB",
   "name": "KickClip",
   "version": "1.1.1",
   "description": "KickClip: save URLs and images with Cmd+Shift+S",
@@ -24,10 +23,7 @@
     "cookies"
   ],
   "host_permissions": [
-    "https://api-gstf2hxbiq-du.a.run.app/*",
     "https://api-hn4mxotviq-du.a.run.app/*",
-    "http://localhost:3000/*",
-    "http://localhost:3001/*",
     "https://www.instagram.com/*",
     "https://*.cdninstagram.com/*",
     "https://*.fbcdn.net/*",
@@ -117,7 +113,7 @@
     ]
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' data: https: http://localhost:3000 http://localhost:3001;"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' data: https:;"
   },
   "action": {
     "default_title": "KickClip",
