@@ -340,9 +340,10 @@ export async function refreshPrimaryHandleCache() {
 
 /**
  * Save an item via chrome.downloads.download with saveAs:true.
- * Opens the OS-native save dialog. Can save to any folder (Desktop, Documents,
- * anywhere). Uses the existing markdown formatter / image blob pipeline /
- * filename sanitization.
+ * Opens the OS-native save dialog and WAITS for actual completion
+ * (Phase U3.3d UX hotfix): resolves ok:true only when the download
+ * state transitions to 'complete'; reports 'cancelled' or 'generic'
+ * errors for interrupted states.
  *
  * @param {object} item
  * @returns {Promise<{ ok: true, filename: string } | { ok: false, reason: string, message?: string }>}
@@ -375,6 +376,60 @@ export async function saveItemViaDownloads(item) {
     const url = URL.createObjectURL(blob);
 
     return await new Promise((resolve) => {
+      let currentDownloadId = null;
+      let settled = false;
+      let timeoutHandle = null;
+      let finalName = suggestedName;
+
+      const cleanup = () => {
+        if (settled) return;
+        settled = true;
+        try {
+          chrome.downloads.onChanged.removeListener(onChanged);
+        } catch (_) {}
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+        try {
+          URL.revokeObjectURL(url);
+        } catch (_) {}
+      };
+
+      const onChanged = (delta) => {
+        if (settled) return;
+        if (delta.id !== currentDownloadId) return;
+
+        if (delta.filename && delta.filename.current) {
+          const parts = delta.filename.current.split(/[/\\]/);
+          finalName = parts[parts.length - 1] || suggestedName;
+        }
+
+        if (delta.state && delta.state.current) {
+          const newState = delta.state.current;
+          if (newState === 'complete') {
+            cleanup();
+            resolve({ ok: true, filename: finalName });
+          } else if (newState === 'interrupted') {
+            cleanup();
+            const err = delta.error?.current || '';
+            if (/USER_CANCELED|user_canceled/i.test(err) || err === 'USER_CANCELED') {
+              resolve({ ok: false, reason: 'cancelled', message: 'User cancelled save' });
+            } else {
+              resolve({ ok: false, reason: 'generic', message: `Download interrupted: ${err || 'unknown'}` });
+            }
+          }
+        }
+      };
+
+      timeoutHandle = setTimeout(() => {
+        if (settled) return;
+        cleanup();
+        resolve({ ok: false, reason: 'cancelled', message: 'Save dialog timed out (5 minutes)' });
+      }, 5 * 60 * 1000);
+
+      chrome.downloads.onChanged.addListener(onChanged);
+
       chrome.downloads.download(
         {
           url,
@@ -383,10 +438,10 @@ export async function saveItemViaDownloads(item) {
           conflictAction: 'uniquify',
         },
         (downloadId) => {
-          setTimeout(() => URL.revokeObjectURL(url), 10000);
-          const err = chrome.runtime.lastError;
-          if (err) {
-            const msg = err.message || 'Unknown download error';
+          const lastErr = chrome.runtime.lastError;
+          if (lastErr) {
+            const msg = lastErr.message || 'Unknown download error';
+            cleanup();
             if (/cancel/i.test(msg) || /USER_CANCELED/i.test(msg)) {
               resolve({ ok: false, reason: 'cancelled', message: msg });
             } else {
@@ -395,10 +450,11 @@ export async function saveItemViaDownloads(item) {
             return;
           }
           if (downloadId == null) {
-            resolve({ ok: false, reason: 'cancelled', message: 'No downloadId returned' });
+            cleanup();
+            resolve({ ok: false, reason: 'cancelled', message: 'No downloadId returned (dialog dismissed)' });
             return;
           }
-          resolve({ ok: true, filename: suggestedName });
+          currentDownloadId = downloadId;
         }
       );
     });
