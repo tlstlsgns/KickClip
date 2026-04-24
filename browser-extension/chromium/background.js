@@ -923,6 +923,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // Generic Google OAuth token handler — replaces prior single-purpose
+  // get-gmail-token. Consumers pass the required scopes explicitly so each
+  // caller follows least-privilege.
+  if (request.action === 'get-google-oauth-token') {
+    const options = { interactive: request.interactive !== false };
+    if (Array.isArray(request.scopes) && request.scopes.length > 0) {
+      options.scopes = request.scopes;
+    }
+    try {
+      chrome.identity.getAuthToken(options, (token) => {
+        if (chrome.runtime.lastError) {
+          console.log('[KICKCLIP-LOG] get-google-oauth-token error:',
+            chrome.runtime.lastError.message);
+          sendResponse({
+            token: null,
+            error: chrome.runtime.lastError.message || 'getAuthToken failed',
+          });
+          return;
+        }
+        if (!token) {
+          sendResponse({ token: null, error: 'No token returned' });
+          return;
+        }
+        sendResponse({ token });
+      });
+      return true; // async response
+    } catch (e) {
+      console.log('[KICKCLIP-LOG] get-google-oauth-token exception:', e);
+      sendResponse({ token: null, error: e?.message || String(e) });
+      return true;
+    }
+  }
+
   if (request.action === 'get-naver-cookies') {
     chrome.cookies.getAll({ domain: '.naver.com' }, (cookies) => {
       if (chrome.runtime.lastError || !cookies?.length) {
