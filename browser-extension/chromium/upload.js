@@ -32,11 +32,62 @@ export function resetPrimaryHandleCache() {
   _cachedPrimaryHandle = undefined;
 }
 
-/** @param {string} raw */
+/**
+ * Sanitize a string to be safe for use as a filename across:
+ * - Windows / macOS / Linux filesystems (removes fs-invalid characters)
+ * - Chrome File System Access API (rejects emoji, certain unicode)
+ *
+ * Removes:
+ * - Windows/Unix fs-invalid: / \ : * ? " < > | -> replaced with '_'
+ * - Control characters (U+0000 to U+001F, U+007F) -> removed
+ * - Emoji and pictographs (most common ranges) -> removed
+ * - Variation selectors (U+FE00 to U+FE0F) -> removed
+ * - Zero-width characters (ZWSP, ZWNJ, ZWJ, BOM) -> removed
+ *
+ * @param {string} raw
+ * @returns {string} sanitized filename, never empty (returns '_' fallback)
+ */
 function sanitizeFilename(raw) {
-  let s = String(raw).replace(/[/\\:*?"<>|]/g, '_');
+  let s = String(raw);
+
+  // 1. Filesystem-invalid ASCII characters -> underscore
+  s = s.replace(/[/\\:*?"<>|]/g, '_');
+
+  // 2. Control characters -> remove
+  s = s.replace(/[\x00-\x1F\x7F]/g, '');
+
+  // 3. Emoji and pictographs (major unicode ranges) -> remove
+  //    Covers most emoji blocks in Unicode 15.1:
+  //    - Miscellaneous Symbols and Pictographs (U+1F300-U+1F5FF)
+  //    - Emoticons (U+1F600-U+1F64F)
+  //    - Transport and Map (U+1F680-U+1F6FF)
+  //    - Supplemental Symbols and Pictographs (U+1F900-U+1F9FF)
+  //    - Symbols and Pictographs Extended-A (U+1FA70-U+1FAFF)
+  //    - Dingbats (U+2700-U+27BF)
+  //    - Miscellaneous Symbols (U+2600-U+26FF)
+  s = s.replace(/[\u{1F300}-\u{1F5FF}]/gu, '');
+  s = s.replace(/[\u{1F600}-\u{1F64F}]/gu, '');
+  s = s.replace(/[\u{1F680}-\u{1F6FF}]/gu, '');
+  s = s.replace(/[\u{1F900}-\u{1F9FF}]/gu, '');
+  s = s.replace(/[\u{1FA70}-\u{1FAFF}]/gu, '');
+  s = s.replace(/[\u{2600}-\u{26FF}]/gu, '');
+  s = s.replace(/[\u{2700}-\u{27BF}]/gu, '');
+
+  // 4. Variation selectors (VS1-VS16, controls emoji presentation)
+  s = s.replace(/[\u{FE00}-\u{FE0F}]/gu, '');
+
+  // 5. Zero-width characters (can cause parsing issues)
+  s = s.replace(/[\u{200B}-\u{200D}\u{FEFF}]/gu, '');
+
+  // 6. Trim whitespace (preserve internal spaces)
   s = s.replace(/^\s+|\s+$/g, '');
+
+  // 7. Remove leading / trailing dots
   s = s.replace(/^\.+|\.+$/g, '');
+
+  // 8. Collapse multiple spaces to single space
+  s = s.replace(/\s{2,}/g, ' ');
+
   return s || '_';
 }
 
