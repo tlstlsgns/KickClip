@@ -31,7 +31,6 @@
     "https://www.instagram.com/*",
     "https://*.cdninstagram.com/*",
     "https://*.fbcdn.net/*",
-    "https://mail.googleapis.com/*",
     "https://www.googleapis.com/*",
     "https://mail.naver.com/*",
     "https://*.naver.com/*",
@@ -113,8 +112,7 @@
     "scopes": [
       "openid",
       "email",
-      "profile",
-      "https://www.googleapis.com/auth/gmail.readonly"
+      "profile"
     ]
   },
   "action": {

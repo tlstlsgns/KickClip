@@ -238,26 +238,6 @@ async function finalizeKCSaveFeedback(hiddenEls, startedAt) {
 }
 
 /**
- * Requests a Gmail OAuth token from background.js via chrome.identity.
- * Returns the token string or null if unavailable.
- */
-async function getGmailAuthToken() {
-  try {
-    return await new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: 'get-gmail-token' }, (response) => {
-        if (chrome.runtime.lastError) {
-          resolve(null);
-        } else {
-          resolve(response?.token || null);
-        }
-      });
-    });
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Collects Naver login cookies from the browser for server-side Puppeteer injection.
  * Returns an array of cookie objects or null if unavailable.
  */
@@ -1837,12 +1817,6 @@ async function saveActiveCoreItem(request = {}) {
         userId = null;
       }
 
-      // Gmail: fetch auth token so server can read mail content
-      let gmailToken = null;
-      if (url.startsWith('https://mail.google.com/')) {
-        gmailToken = await getGmailAuthToken();
-      }
-
       // Naver Mail: collect login cookies for server-side Puppeteer injection
       let naverCookies = null;
       if (url.startsWith('https://mail.naver.com/')) {
@@ -1968,7 +1942,6 @@ async function saveActiveCoreItem(request = {}) {
         img_url_method: isYouTubeSave ? 'youtube-thumbnail' : 'screenshot',
         ...(isYouTubeSave ? { img_url: youtubeThumbnailUrl } : {}),
         ...(userId ? { userId } : {}),
-        ...(gmailToken ? { gmail_token: gmailToken } : {}),
         ...(naverCookies ? { naver_cookies: naverCookies } : {}),
       };
 
@@ -2210,12 +2183,6 @@ async function saveActiveCoreItem(request = {}) {
       userId = null;
     }
 
-    // Gmail: fetch auth token so server can read mail content
-    let gmailToken = null;
-    if (url.startsWith('https://mail.google.com/')) {
-      gmailToken = await getGmailAuthToken();
-    }
-
     // Naver Mail: collect login cookies for server-side Puppeteer injection
     let naverCookies = null;
     if (url.startsWith('https://mail.naver.com/')) {
@@ -2259,7 +2226,6 @@ async function saveActiveCoreItem(request = {}) {
       ...(meta?.platform      ? { platform:        meta.platform }      : {}),
       ...(meta?.confirmedType ? { confirmed_type:  meta.confirmedType } : {}),
       sender: meta?.sender ?? '',
-      ...(gmailToken ? { gmail_token: gmailToken } : {}),
       ...(naverCookies ? { naver_cookies: naverCookies } : {}),
       ...(Number.isFinite(overlayRatio) ? { overlay_ratio: overlayRatio } : {}),
       is_portrait: isPortraitExtracted,

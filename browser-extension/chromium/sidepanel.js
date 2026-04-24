@@ -474,7 +474,6 @@ async function signInWithGoogle() {
             'openid',
             'email',
             'profile',
-            'https://www.googleapis.com/auth/gmail.readonly',
           ],
         },
         (token) => {

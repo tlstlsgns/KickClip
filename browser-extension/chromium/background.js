@@ -923,17 +923,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === 'get-gmail-token') {
-    chrome.identity.getAuthToken({ interactive: true }, (token) => {
-      if (chrome.runtime.lastError || !token) {
-        sendResponse({ token: null });
-      } else {
-        sendResponse({ token });
-      }
-    });
-    return true; // keep channel open for async sendResponse
-  }
-
   if (request.action === 'get-naver-cookies') {
     chrome.cookies.getAll({ domain: '.naver.com' }, (cookies) => {
       if (chrome.runtime.lastError || !cookies?.length) {
