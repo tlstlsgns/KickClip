@@ -219,6 +219,82 @@
       cursor: pointer;
     }
     #btn-signout:hover { color: #111; border-color: #aaa; }
+    .kc-dir-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+      background: rgba(0, 0, 0, 0.02);
+    }
+    .kc-dir-folder-btn {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: transparent;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #6b7280;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      text-align: left;
+    }
+    .kc-dir-folder-btn:hover {
+      background: rgba(188, 19, 254, 0.06);
+      color: #BC13FE;
+      border-color: rgba(188, 19, 254, 0.3);
+    }
+    .kc-dir-folder-btn:active { background: rgba(188, 19, 254, 0.12); }
+    .kc-dir-folder-btn.kc-dir-configured {
+      color: #BC13FE;
+      border-color: rgba(188, 19, 254, 0.4);
+      background: rgba(188, 19, 254, 0.05);
+    }
+    .kc-dir-folder-btn.kc-dir-missing {
+      color: #dc2626;
+      border-color: rgba(220, 38, 38, 0.4);
+      background: rgba(220, 38, 38, 0.05);
+    }
+    .kc-dir-folder-icon { flex: 0 0 auto; }
+    .kc-dir-folder-label {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    .kc-dir-auto-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      user-select: none;
+      flex: 0 0 auto;
+      font-size: 12px;
+      color: #6b7280;
+    }
+    .kc-dir-auto-checkbox {
+      cursor: pointer;
+      accent-color: #BC13FE;
+    }
+    @media (prefers-color-scheme: dark) {
+      .kc-dir-container {
+        border-bottom-color: rgba(255, 255, 255, 0.06);
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .kc-dir-folder-btn {
+        border-color: rgba(255, 255, 255, 0.12);
+        color: #9ca3af;
+      }
+      .kc-dir-auto-wrap {
+        color: #9ca3af;
+      }
+    }
 
     /* ── Directory list ── */
     #sp-directory-list {
@@ -1002,6 +1078,33 @@
       stroke: rgba(0, 0, 0, 0.85);
     }
 
+    /* ── Upload result mark overlay (Phase U2) ─────────────────────── */
+    .data-card-upload-btn.kc-upload--feedback svg {
+      opacity: 1 !important;
+    }
+    .data-card-upload-btn .kc-upload-mark {
+      display: none;
+      width: 10px;
+      height: 10px;
+      stroke: currentColor;
+      stroke-width: 2.5;
+      fill: none;
+    }
+    .data-card-upload-btn.kc-upload--success .kc-upload-mark.kc-upload-mark--check {
+      display: inline-block;
+      stroke: #22c55e;
+    }
+    .data-card-upload-btn.kc-upload--success svg:not(.kc-upload-mark) {
+      display: none;
+    }
+    .data-card-upload-btn.kc-upload--error .kc-upload-mark.kc-upload-mark--x {
+      display: inline-block;
+      stroke: #ef4444;
+    }
+    .data-card-upload-btn.kc-upload--error svg:not(.kc-upload-mark) {
+      display: none;
+    }
+
     /* Upload destination popover (Phase U1) */
     .kc-upload-popover {
       display: none;
@@ -1043,6 +1146,40 @@
       flex-shrink: 0;
       font-size: 14px;
       line-height: 1;
+    }
+
+    /* ── Upload toast (Phase U2) ─────────────────────────────────────── */
+    .kc-toast {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-8px);
+      opacity: 0;
+      pointer-events: none;
+      max-width: 90%;
+      padding: 10px 16px;
+      background: rgba(30, 30, 30, 0.92);
+      color: #fff;
+      border-radius: 8px;
+      font-family: 'Roboto', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.4;
+      text-align: center;
+      white-space: pre-line;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+      transition: opacity 180ms ease, transform 180ms ease;
+      z-index: 2147483500;
+    }
+    .kc-toast.kc-toast--visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    .kc-toast.kc-toast--error {
+      background: rgba(200, 30, 30, 0.92);
+    }
+    .kc-toast.kc-toast--success {
+      background: rgba(30, 30, 30, 0.92);
     }
 
     /* ── DnD guide line ── */
@@ -1116,6 +1253,25 @@
           <button id="btn-signout">Sign out</button>
         </div>
         <button id="sp-shortcut-btn" title="Click to change shortcut">⌘⇧S</button>
+      </div>
+
+      <div class="kc-dir-container" id="kc-dir-container">
+        <button
+          type="button"
+          id="kc-dir-folder-btn"
+          class="kc-dir-folder-btn kc-dir-unconfigured"
+          title="저장 폴더를 선택하세요"
+          aria-label="저장 폴더 선택"
+        >
+          <svg class="kc-dir-folder-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span class="kc-dir-folder-label" id="kc-dir-folder-label">저장 위치 선택</span>
+        </button>
+        <label class="kc-dir-auto-wrap" for="kc-dir-auto-checkbox">
+          <input type="checkbox" id="kc-dir-auto-checkbox" class="kc-dir-auto-checkbox" />
+          <span class="kc-dir-auto-label">Auto</span>
+        </label>
       </div>
 
       <!-- Filter bar -->

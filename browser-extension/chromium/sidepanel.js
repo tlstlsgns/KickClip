@@ -29,6 +29,139 @@ import {
   onSnapshot,
 } from './firebase-bundle.js';
 
+import {
+  preloadPrimaryHandle,
+  getPrimaryHandleForGesture,
+  openPickerWindow,
+  refreshPrimaryHandleCache,
+  writeItemToHandle,
+  saveItemViaDownloads,
+} from './upload.js';
+
+const KC_AUTO_STORAGE_KEY = 'kc_upload_auto_enabled';
+
+// Picker popup window tracking for auto-close + re-click handling.
+let _kcPickerWindowId = null;
+let _kcPickerBusy = false;
+
+chrome.windows.onFocusChanged.addListener((focusedWindowId) => {
+  if (_kcPickerWindowId == null) return;
+  if (_kcPickerBusy) return;
+  if (focusedWindowId === chrome.windows.WINDOW_ID_NONE) return;
+  if (focusedWindowId === _kcPickerWindowId) return;
+
+  const idToClose = _kcPickerWindowId;
+  _kcPickerWindowId = null;
+  _kcPickerBusy = false;
+  chrome.windows.remove(idToClose).catch((e) => {
+    console.log('[KICKCLIP-LOG] auto-close picker error:', e);
+  });
+});
+
+chrome.windows.onRemoved.addListener((closedWindowId) => {
+  if (closedWindowId === _kcPickerWindowId) {
+    _kcPickerWindowId = null;
+    _kcPickerBusy = false;
+  }
+});
+
+/** @returns {Promise<boolean>} */
+async function getAutoEnabled() {
+  try {
+    const result = await chrome.storage.local.get(KC_AUTO_STORAGE_KEY);
+    return Boolean(result[KC_AUTO_STORAGE_KEY]);
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] getAutoEnabled error:', e);
+    return false;
+  }
+}
+
+/** @param {boolean} value */
+async function setAutoEnabled(value) {
+  try {
+    await chrome.storage.local.set({ [KC_AUTO_STORAGE_KEY]: Boolean(value) });
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] setAutoEnabled error:', e);
+  }
+}
+
+/**
+ * Updates the Dir container UI to reflect current folder handle and Auto state.
+ * @param {boolean} autoEnabled
+ */
+function _refreshDirContainer(autoEnabled) {
+  const btn = document.getElementById('kc-dir-folder-btn');
+  const label = document.getElementById('kc-dir-folder-label');
+  const autoBox = document.getElementById('kc-dir-auto-checkbox');
+  if (!btn || !label || !autoBox) return;
+
+  const handle = getPrimaryHandleForGesture();
+  if (handle && handle.name) {
+    label.textContent = handle.name;
+    btn.classList.add('kc-dir-configured');
+    btn.classList.remove('kc-dir-unconfigured', 'kc-dir-missing');
+    btn.title = `저장 폴더: ${handle.name} (클릭하여 변경)`;
+  } else {
+    label.textContent = '저장 위치 선택';
+    btn.classList.remove('kc-dir-configured', 'kc-dir-missing');
+    btn.classList.add('kc-dir-unconfigured');
+    btn.title = '저장 폴더를 선택하세요';
+  }
+
+  autoBox.checked = Boolean(autoEnabled);
+}
+
+function _markDirFolderMissing(folderName) {
+  const btn = document.getElementById('kc-dir-folder-btn');
+  const label = document.getElementById('kc-dir-folder-label');
+  if (!btn || !label) return;
+  label.textContent = folderName ? `${folderName} (없음)` : '폴더 없음';
+  btn.classList.remove('kc-dir-configured', 'kc-dir-unconfigured');
+  btn.classList.add('kc-dir-missing');
+  btn.title = '폴더를 찾을 수 없습니다. 클릭하여 다시 선택하세요.';
+}
+
+async function handleOpenFolderSettings() {
+  // Re-click: close any existing picker window first
+  if (_kcPickerWindowId != null) {
+    try {
+      await chrome.windows.remove(_kcPickerWindowId);
+    } catch (e) {
+      console.log('[KICKCLIP-LOG] handleOpenFolderSettings close prev error:', e);
+    }
+    _kcPickerWindowId = null;
+    _kcPickerBusy = false;
+  }
+
+  try {
+    const winId = await openPickerWindow();
+    if (!winId) {
+      showKcToast('폴더 설정 창을 열지 못했습니다.', 'error');
+      return;
+    }
+    _kcPickerWindowId = winId;
+    _kcPickerBusy = false;
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] openPickerWindow error:', e);
+    showKcToast(`폴더 설정 창 오류: ${e?.message || String(e)}`, 'error');
+  }
+}
+
+async function handleAutoCheckboxChange(e) {
+  const checked = Boolean(e.target.checked);
+  await setAutoEnabled(checked);
+}
+
+(async () => {
+  try {
+    await preloadPrimaryHandle();
+  } catch (e) {
+    console.log('[KICKCLIP-LOG] preloadPrimaryHandle failed:', e);
+  }
+  const auto = await getAutoEnabled();
+  _refreshDirContainer(auto);
+})();
+
 // ── Firebase config ───────────────────────────────────────────────────────────
 const DEV_FIREBASE_CONFIG = {
   apiKey:            'AIzaSyA9X_FEi9cgvFmDdEmeEvJW0msXSIrP6p0',
@@ -99,6 +232,8 @@ const dashboardScreen = document.getElementById('dashboard-screen');
 const btnSignin       = document.getElementById('btn-signin');
 const btnSignout      = document.getElementById('btn-signout');
 const spShortcutBtn   = document.getElementById('sp-shortcut-btn');
+const dirFolderBtn    = document.getElementById('kc-dir-folder-btn');
+const dirAutoBox      = document.getElementById('kc-dir-auto-checkbox');
 const loginError      = document.getElementById('login-error');
 const spUserAvatar    = document.getElementById('sp-user-avatar');
 const spDirectoryList = document.getElementById('sp-directory-list');
@@ -671,6 +806,8 @@ function createDataCard(item) {
                 <polyline points="17 8 12 3 7 8"></polyline>
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
+              <svg class="kc-upload-mark kc-upload-mark--check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg class="kc-upload-mark kc-upload-mark--x" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
           <div class="data-card-delete" title="Delete">
@@ -710,6 +847,8 @@ function createDataCard(item) {
           <polyline points="17 8 12 3 7 8"></polyline>
           <line x1="12" y1="3" x2="12" y2="15"></line>
         </svg>
+        <svg class="kc-upload-mark kc-upload-mark--check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <svg class="kc-upload-mark kc-upload-mark--x" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>`;
 
@@ -1055,6 +1194,12 @@ function removeOptimisticCard(tempId) {
 // ── Button event listeners ────────────────────────────────────────────────────
 btnSignin.addEventListener('click', signInWithGoogle);
 btnSignout.addEventListener('click', signOut);
+if (dirFolderBtn) {
+  dirFolderBtn.addEventListener('click', handleOpenFolderSettings);
+}
+if (dirAutoBox) {
+  dirAutoBox.addEventListener('change', handleAutoCheckboxChange);
+}
 
 // AI board disabled
 // spAiBoardClose.addEventListener('click', () => {
@@ -1165,6 +1310,108 @@ async function moveDirectoryToPosition(userId, directoryId, newIndex) {
   if (!res.ok) throw new Error(`move-directory failed: ${res.status}`);
 }
 
+// ── Upload toast + local-save feedback (Phase U2) ─────────────────────────────
+
+let kcToastEl = null;
+let kcToastTimer = null;
+
+function showKcToast(message, kind = 'success', duration = 2500) {
+  if (!kcToastEl) {
+    kcToastEl = document.createElement('div');
+    kcToastEl.className = 'kc-toast';
+    document.body.appendChild(kcToastEl);
+  }
+  kcToastEl.textContent = message;
+  kcToastEl.classList.remove('kc-toast--visible', 'kc-toast--success', 'kc-toast--error');
+  kcToastEl.classList.add(kind === 'error' ? 'kc-toast--error' : 'kc-toast--success');
+  void kcToastEl.offsetWidth;
+  kcToastEl.classList.add('kc-toast--visible');
+  if (kcToastTimer) clearTimeout(kcToastTimer);
+  kcToastTimer = setTimeout(() => {
+    if (kcToastEl) kcToastEl.classList.remove('kc-toast--visible');
+  }, duration);
+}
+
+function flashUploadMark(btnEl, success) {
+  if (!btnEl) return;
+  const cls = success ? 'kc-upload--success' : 'kc-upload--error';
+  btnEl.classList.add(cls, 'kc-upload--feedback');
+  setTimeout(() => {
+    btnEl.classList.remove(cls, 'kc-upload--feedback');
+  }, 1200);
+}
+
+function handleLocalUpload(item, anchorBtn) {
+  saveItemViaDownloads(item)
+    .then((result) => {
+      if (result.ok) {
+        flashUploadMark(anchorBtn, true);
+        const safeTitle = (item.title || '').trim() || '(untitled)';
+        showKcToast(`${safeTitle}\n저장 완료`, 'success');
+      } else if (result.reason === 'cancelled') {
+        flashUploadMark(anchorBtn, false);
+      } else {
+        flashUploadMark(anchorBtn, false);
+        showKcToast(`저장 실패: ${result.message || 'Unknown error'}`, 'error');
+      }
+    })
+    .catch((e) => {
+      flashUploadMark(anchorBtn, false);
+      showKcToast(`저장 실패: ${e?.message || String(e)}`, 'error');
+      console.log('[KICKCLIP-LOG] handleLocalUpload saveItemViaDownloads error:', e);
+    });
+}
+
+function handleAutoPathUpload(item, anchorBtn, handle) {
+  writeItemToHandle(handle, item)
+    .then((result) => {
+      if (result.ok) {
+        flashUploadMark(anchorBtn, true);
+        const safeTitle = (item.title || '').trim() || '(untitled)';
+        showKcToast(`${safeTitle}\nsaved to ${result.primaryFolderName}`, 'success');
+      } else {
+        flashUploadMark(anchorBtn, false);
+        let msg;
+        switch (result.reason) {
+          case 'permission':
+            msg = '폴더 접근 권한이 거부되었습니다. 저장 폴더를 다시 선택하세요.';
+            _markDirFolderMissing(handle?.name);
+            break;
+          case 'folder-missing':
+            msg = '폴더를 찾을 수 없습니다. 저장 폴더를 다시 선택하세요.';
+            _markDirFolderMissing(handle?.name);
+            break;
+          default:
+            msg = `저장 실패: ${result.message || 'Unknown error'}`;
+        }
+        showKcToast(msg, 'error');
+      }
+    })
+    .catch((e) => {
+      flashUploadMark(anchorBtn, false);
+      showKcToast(`저장 실패: ${e?.message || String(e)}`, 'error');
+      console.log('[KICKCLIP-LOG] handleAutoPathUpload error:', e);
+    });
+}
+
+function openUploadPopover(item, anchorBtn) {
+  openKcUploadPopover(anchorBtn, item);
+}
+
+function handleUploadButtonClick(item, anchorBtn) {
+  (async () => {
+    const autoEnabled = await getAutoEnabled();
+    const handle = getPrimaryHandleForGesture();
+
+    if (autoEnabled && handle) {
+      handleAutoPathUpload(item, anchorBtn, handle);
+      return;
+    }
+
+    openUploadPopover(item, anchorBtn);
+  })();
+}
+
 // ── Upload destination popover (Phase U1 — UI only, no file I/O) ──────────────
 
 function onKcUploadEscapeKey(ev) {
@@ -1207,10 +1454,15 @@ function ensureKcUploadPopover() {
       e.stopPropagation();
       const dest = itemBtn.getAttribute('data-destination') || '';
       const item = div._kcItem;
+      const anchorBtn = div._kcAnchorBtn;
       closeKcUploadPopover();
       if (!item) return;
-      const itemId = item.id || getItemId(item);
-      console.log('[KICKCLIP-LOG] Upload requested:', { destination: dest, itemId, item });
+      if (dest === 'local') {
+        handleLocalUpload(item, anchorBtn);
+      } else if (dest === 'drive') {
+        const itemId = item.id || getItemId(item);
+        console.log('[KICKCLIP-LOG] Upload requested:', { destination: dest, itemId, item });
+      }
     });
   });
   app.appendChild(div);
@@ -1301,7 +1553,7 @@ function attachUploadHandlers(container) {
       if (card.querySelector('.data-card-header.delete-pending')) return;
       const item = kcCardItemByEl.get(card);
       if (!item) return;
-      openKcUploadPopover(btn, item);
+      handleUploadButtonClick(item, btn);
     });
   });
 }
@@ -2205,6 +2457,26 @@ window.addEventListener('blur', () => {
 // ── Optimistic card message listener ─────────────────────────────────────────
 if (chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message) => {
+    if (message.action === 'kc-picker-busy') {
+      _kcPickerBusy = Boolean(message.busy);
+      return;
+    }
+
+    if (message.action === 'kc-picker-handle-ready') {
+      (async () => {
+        try {
+          await refreshPrimaryHandleCache();
+          await setAutoEnabled(true);
+          _refreshDirContainer(true);
+          showKcToast(`저장 폴더 설정 완료: ${message.folderName || ''}`, 'success');
+        } catch (e) {
+          console.log('[KICKCLIP-LOG] picker handle ready processing failed:', e);
+          showKcToast('폴더 설정을 저장하지 못했습니다.', 'error');
+        }
+      })();
+      return;
+    }
+
     if (message.action === 'shortcut-updated') {
       const raw = typeof message.shortcut === 'string' && message.shortcut
         ? message.shortcut

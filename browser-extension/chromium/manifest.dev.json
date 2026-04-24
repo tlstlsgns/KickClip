@@ -13,6 +13,7 @@
   "permissions": [
     "activeTab",
     "storage",
+    "downloads",
     "scripting",
     "tabs",
     "contextMenus",
@@ -84,7 +85,11 @@
         "sidepanel.html",
         "sidepanel.js",
         "sidepanel.css",
-        "firebase-bundle.js"
+        "firebase-bundle.js",
+        "upload.js",
+        "uploadStorage.js",
+        "picker.html",
+        "picker.js"
       ],
       "matches": [
         "<all_urls>"
