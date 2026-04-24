@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu8DlT+OvX4Noo9hFmSPeHjswg/udfCPEwsb0qfWd8FTcwe6dIgxHg607Tq5ZXO8F6x1w4cSGppPu3dr6UDGBMX5gSmdIUsBAxgTAAmlg/d4tRXIt36K1v8RZ8xLPOJKxtCUTwhAX4Vu9yHB8HD6e3YdBrFZ8ulcmc8QYhLAFdgWC5Toe96i66txcFNn7cuvBgBEJ+qNQhnOlHhwKTZGmQoXShZNyJboxT+Ii8ITaDMT5+ahwk61TswXgz/aWTnVLNUxkXnVIvudMuFfIYVUs1Wj8IA9JFNZyY6OZtm4IkNwiPaS0nP9Vzm66mHeOdZJeXIJvpFLmqS5nVchfuevdbwIDAQAB",
   "name": "KickClip",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "KickClip: save URLs and images with Cmd+Shift+S",
   "icons": {
     "16": "assets/icons/icon_16.png",
