@@ -34,12 +34,6 @@ GOOGLE_CLIENT_ID=708660683174-dk1maoouohahc4s15d953vq4mgtb4ovn.apps.googleuserco
 # Google OAuth Desktop App Client Secret (required even with PKCE)
 # Get this from the same OAuth client page in Google Cloud Console
 GOOGLE_CLIENT_SECRET=YOUR_CLIENT_SECRET_HERE
-
-# Instagram/Facebook OAuth Configuration
-# Facebook App ID (Instagram uses Facebook OAuth)
-FACEBOOK_APP_ID=854337097429320
-# Facebook App Secret (required for Instagram OAuth token exchange)
-FACEBOOK_APP_SECRET=b6cacdb98de2bf45bcf20f3d1ee57f9f
 ```
 
 **Note on Environment Variables in Electron:**
