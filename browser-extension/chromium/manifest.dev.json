@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqrbEn3kGPS9sJ3RNrOwgLiOuSzI9HqpfdS26N3C8caFpMuQj5e//gSzeOfkihf9fynU7c6WzvMRzbHEafqNOoh/CcDVpzUjMAMJiVZl++W3rHasmymJmhylppi5iGsZfx15TeQVAIgGNqRQtBuRwvPzPJnMj5zpH56KkvY7nWuSOmkLE7rdWkwS2rzK2czsS2q5L0fH3eemHAWG8lDxhnDhyqGwTTyaetslUW03zB1sKJHuFLfjRko3KkpJp4qMRe1Rlbb1yWLgtfLcEoWvXc9tpdW8MqUsEEyZ7jIydChuErYVIXbZ9eEORxd6tgTNa/Go7mbfne1sivOR2O2IjvQIDAQAB",
   "name": "KickClip",
-  "version": "1.1.2",
-  "description": "KickClip: save URLs and images with Cmd+Shift+S",
+  "version": "1.1.3",
+  "description": "Capture any web page, image, or content with Cmd+Shift+S. Save to folder or Drive. Auto-organized.",
   "icons": {
     "16": "assets/icons/icon_16.png",
     "32": "assets/icons/icon_32.png",

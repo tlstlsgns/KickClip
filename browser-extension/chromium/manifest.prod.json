@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "KickClip",
-  "version": "1.1.2",
-  "description": "KickClip: save URLs and images with Cmd+Shift+S",
+  "version": "1.1.3",
+  "description": "Capture any web page, image, or content with Cmd+Shift+S. Save to folder or Drive. Auto-organized.",
   "icons": {
     "16": "assets/icons/icon_16.png",
     "32": "assets/icons/icon_32.png",
