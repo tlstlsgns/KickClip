@@ -9,6 +9,12 @@ import { BRAND } from './brandConfig.js';
 const PURPLE_OVERLAY_ID = 'kickclip-highlight-overlay';
 const FULLPAGE_OVERLAY_ID = 'kickclip-fullpage-highlight-overlay';
 const CORE_BADGE_ID = 'kickclip-status-badge-core';
+// Externally-registered status_badge texts. Set once at content-script
+// init (and refreshed if the keyboard shortcut changes). Keeps text
+// decisions out of uiManager — text composition (which depends on
+// platform-specific shortcut formatting) lives in coreEntry.
+let _coreBadgeDefaultText = '';
+let _coreBadgeFailedText = '';
 
 // ── Debug flag ────────────────────────────────────────────────────────────
 // Set to true to show ItemMap candidate outlines (green/red/blue) for debugging.
@@ -355,7 +361,12 @@ window.addEventListener('resize', () => {
 
 /**
  * Update CoreHighlight class only — no position or opacity change.
- * Used for: saved state sync, shutter feedback, saved-urls-updated.
+ * Sync the status_badge to match the shutter state:
+ *   - 'success' → success class only (TEXT NOT SET HERE — caller invokes
+ *                 setCoreStatusBadgeText with category-aware wording).
+ *   - 'error'   → error class + registered failed text.
+ *   - 'none'    → no class + registered default text.
+ * Used for: shutter feedback, hover restore.
  */
 export function updateCoreHighlightClass(isSaved, shutterState = 'none', forceReplace = false) {
   try {
@@ -370,20 +381,19 @@ export function updateCoreHighlightClass(isSaved, shutterState = 'none', forceRe
 
     // Sync core status badge
     const coreBadge = getKCShadowElement(CORE_BADGE_ID);
-    // Ensure transition is active for shutter color change
-    if (coreBadge) coreBadge.style.transition = '';
-    if (coreBadge) {
-      coreBadge.classList.remove('shutter-success', 'shutter-error');
-      coreBadge.style.background = '';
-      if (shutterState === 'success') {
-        coreBadge.classList.add('shutter-success');
-        coreBadge.textContent = 'Saved!';
-      } else if (shutterState === 'error') {
-        coreBadge.classList.add('shutter-error');
-        coreBadge.textContent = 'Failed';
-      } else {
-        coreBadge.textContent = 'Save It!';
-      }
+    if (!coreBadge) return;
+    coreBadge.style.transition = '';
+    coreBadge.classList.remove('shutter-success', 'shutter-error');
+    coreBadge.style.background = '';
+    if (shutterState === 'success') {
+      coreBadge.classList.add('shutter-success');
+      // Text intentionally NOT set here — caller (coreEntry) invokes
+      // setCoreStatusBadgeText with category-aware wording.
+    } else if (shutterState === 'error') {
+      coreBadge.classList.add('shutter-error');
+      coreBadge.textContent = _coreBadgeFailedText;
+    } else {
+      coreBadge.textContent = _coreBadgeDefaultText;
     }
   } catch (e) {}
 }
@@ -514,18 +524,50 @@ function ensureCoreBadge() {
 export function showPageStatusBadge(_badgeState = 'default') {}
 export function showPageStatusBadgeText(_text) {}
 
+/**
+ * Register the status_badge texts used for non-success states.
+ * Called by coreEntry at init (and on shortcut change) so the badge's
+ * 'default' (hover) and 'error' (clip failure) states render with
+ * consistent, platform-correct wording without uiManager knowing
+ * anything about clipboard semantics or platform glyphs.
+ *
+ * Success text (e.g. "Image clipped" / "URL clipped") is NOT registered
+ * here because it depends on the per-item category, which is only
+ * known at clip time — use setCoreStatusBadgeText() instead at that
+ * moment.
+ */
+export function setCoreBadgeTexts({ defaultText, failedText } = {}) {
+  if (typeof defaultText === 'string') _coreBadgeDefaultText = defaultText;
+  if (typeof failedText === 'string') _coreBadgeFailedText = failedText;
+}
+
+/**
+ * Imperatively set the status_badge text. Used by coreEntry after a
+ * successful clip to render category-aware text ("Image clipped" /
+ * "URL clipped"). Does not change visual state classes
+ * (shutter-success / shutter-error) — those are still driven by
+ * triggerShutterEffect.
+ */
+export function setCoreStatusBadgeText(text) {
+  try {
+    const el = getKCShadowElement(CORE_BADGE_ID);
+    if (!el) return;
+    el.textContent = String(text || '');
+  } catch (_) {}
+}
+
 export function showCoreStatusBadge(badgeState = 'default') {
   try {
     const el = ensureCoreBadge();
     el.classList.remove('shutter-success', 'shutter-error');
     if (badgeState === 'success') {
-      el.textContent = 'Saved!';
       el.classList.add('shutter-success');
+      // Text set by caller via setCoreStatusBadgeText.
     } else if (badgeState === 'error') {
-      el.textContent = 'Failed';
+      el.textContent = _coreBadgeFailedText;
       el.classList.add('shutter-error');
     } else {
-      el.textContent = 'Save It!';
+      el.textContent = _coreBadgeDefaultText;
     }
     el.style.background = '';
     el.style.opacity = '1';

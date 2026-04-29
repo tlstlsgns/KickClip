@@ -24,6 +24,8 @@ import {
   clearAiTooltipContent,
   positionMetadataTooltip,
   showCoreStatusBadge,
+  setCoreBadgeTexts,
+  setCoreStatusBadgeText,
   hideCoreStatusBadge,
   positionCoreStatusBadge,
   renderItemMapCandidates,
@@ -208,9 +210,11 @@ function formatShortcutForDisplay(raw) {
 function initShortcutCache() {
   try {
     _shortcutDisplay = formatShortcutForDisplay('Ctrl+Shift+S');
+    syncCoreBadgeTexts();
     chrome.storage.local.get('kickclipShortcut', (result) => {
       try {
         _shortcutDisplay = formatShortcutForDisplay(result?.kickclipShortcut);
+        syncCoreBadgeTexts();
       } catch (_) {}
     });
     chrome.storage.onChanged.addListener((changes, area) => {
@@ -220,10 +224,24 @@ function initShortcutCache() {
           _shortcutDisplay = formatShortcutForDisplay(
             changes.kickclipShortcut?.newValue
           );
+          syncCoreBadgeTexts();
         } catch (_) {}
       }
     });
   } catch (_) {}
+}
+
+/**
+ * Build the current status_badge texts from the cached shortcut and
+ * register them with uiManager. Called at init and whenever the
+ * shortcut changes via storage.onChanged.
+ */
+function syncCoreBadgeTexts() {
+  const shortcut = _shortcutDisplay || 'shortcut';
+  setCoreBadgeTexts({
+    defaultText: `Press ${shortcut} to clip`,
+    failedText: 'Clip failed',
+  });
 }
 
 // ─── Unified fullpage toast (single DOM element, kind-aware lifecycle) ───
@@ -2274,20 +2292,30 @@ async function saveActiveCoreItem(request = {}) {
     const effectiveCoreSaveShutterStatus = isSignedIn() ? saveShutterStatus : 'success';
     triggerShutterEffect('core', effectiveCoreSaveShutterStatus);
 
-    // Combined Toast: show after shutter effect fires, using shutter status
-    // as the save-success indicator (per intended design).
+    // CoreItem clip feedback lives in the per-item status_badge, NOT in a
+    // fullpage toast. We wait for the clipboard result, then write the
+    // category-aware "clipped" wording on success. Failure text is already
+    // applied automatically by triggerShutterEffect('core', 'error') via
+    // the registered _coreBadgeFailedText.
     if (window.self === window.top) {
       (async () => {
         try {
           const clipboardResult = await coreClipboardPromise;
-          const saveSuccess = isSignedIn() && saveShutterStatus === 'success';
-          const message = buildToastMessage(
-            coreClipboardCategory,
-            String(meta?.confirmedType || '').trim(),
-            !!clipboardResult?.success,
-            saveSuccess
-          );
-          showCopyToast(message);
+          if (clipboardResult?.success) {
+            const successText = coreClipboardCategory === 'Image'
+              ? 'Image clipped'
+              : 'URL clipped';
+            setCoreStatusBadgeText(successText);
+          } else if (!isSignedIn()) {
+            // Signed-out clip = clipboard only. If clipboard failed, the
+            // whole clip failed — repaint shutter and badge to error.
+            triggerShutterEffect('core', 'error');
+          }
+          // Signed-in case where clipboard fails but save might succeed:
+          // shutter already reflects save status correctly via
+          // saveShutterStatus; "Clip failed" text would be wrong because
+          // save did clip something to Firestore. Keep current behavior
+          // (text was set by triggerShutterEffect based on save status).
         } catch (_) { /* silent */ }
       })();
     }

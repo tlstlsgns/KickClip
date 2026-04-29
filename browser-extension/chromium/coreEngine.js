@@ -59,6 +59,8 @@ export {
   showPageStatusBadgeText,
   hidePageStatusBadge,
   showCoreStatusBadge,
+  setCoreBadgeTexts,
+  setCoreStatusBadgeText,
   hideCoreStatusBadge,
   positionCoreStatusBadge,
   clearCoreSelection,
