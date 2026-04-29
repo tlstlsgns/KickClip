@@ -2119,15 +2119,30 @@ async function saveActiveCoreItem(request = {}) {
 
     // CoreItem active → existing logic
     const meta = state.lastExtractedMetadata;
+    // Relay mode: top-frame is processing a clip that originated inside a
+    // cross-origin iframe. The iframe handler already drew shutter +
+    // status_badge text in its own Shadow DOM (Phase 11a). The top frame
+    // must not paint anything on its own highlight overlay / status_badge
+    // here — doing so would tint whatever stale UI happens to be left
+    // over from a previous top-frame hover, including completely
+    // unrelated CoreItems. Top-frame's job in relay mode is data only:
+    // clipboard copy, _savedUrlSet update, Optimistic Card dispatch,
+    // server fetch.
+    const isIframeRelay = meta?._isIframeRelay === true;
     const url = String(meta?.activeHoverUrl || activeUrl).trim();
     if (!url) return { success: false, reason: 'missing-url' };
     const youtubeShortcode = extractYouTubeShortcodeFromUrl(url);
     const youtubeThumbnailUrl = youtubeShortcode ? getYouTubeThumbnailUrl(youtubeShortcode) : '';
     const isYouTubeSave = !!youtubeThumbnailUrl;
 
-    // Step 1: hide CoreHighlight + StatusBadge for screenshot
-    const coreOverlayEl = getKCShadowElement('kickclip-highlight-overlay');
-    const coreBadgeEl = getKCShadowElement('kickclip-status-badge-core');
+    // Step 1: hide CoreHighlight + StatusBadge for screenshot.
+    // Skipped in relay mode — iframe owns the visible UI.
+    const coreOverlayEl = !isIframeRelay
+      ? getKCShadowElement('kickclip-highlight-overlay')
+      : null;
+    const coreBadgeEl = !isIframeRelay
+      ? getKCShadowElement('kickclip-status-badge-core')
+      : null;
     if (coreOverlayEl) { coreOverlayEl.style.transition = ''; coreOverlayEl.style.opacity = '0'; }
     if (coreBadgeEl)   { coreBadgeEl.style.transition = '';   coreBadgeEl.style.opacity = '0'; }
 
@@ -2286,35 +2301,38 @@ async function saveActiveCoreItem(request = {}) {
       } catch (e) {}
     }
 
-    const effectiveCoreSaveShutterStatus = isSignedIn() ? saveShutterStatus : 'success';
-    triggerShutterEffect('core', effectiveCoreSaveShutterStatus);
+    if (!isIframeRelay) {
+      const effectiveCoreSaveShutterStatus = isSignedIn() ? saveShutterStatus : 'success';
+      triggerShutterEffect('core', effectiveCoreSaveShutterStatus);
 
-    // CoreItem clip feedback lives in the per-item status_badge, NOT in a
-    // fullpage toast. We wait for the clipboard result, then write the
-    // category-aware "clipped" wording on success. Failure text is already
-    // applied automatically by triggerShutterEffect('core', 'error') via
-    // the registered _coreBadgeFailedText.
-    if (window.self === window.top) {
-      (async () => {
-        try {
-          const clipboardResult = await coreClipboardPromise;
-          if (clipboardResult?.success) {
-            const successText = coreClipboardCategory === 'Image'
-              ? 'Image clipped'
-              : 'URL clipped';
-            setCoreStatusBadgeText(successText);
-          } else if (!isSignedIn()) {
-            // Signed-out clip = clipboard only. If clipboard failed, the
-            // whole clip failed — repaint shutter and badge to error.
-            triggerShutterEffect('core', 'error');
-          }
-          // Signed-in case where clipboard fails but save might succeed:
-          // shutter already reflects save status correctly via
-          // saveShutterStatus; "Clip failed" text would be wrong because
-          // save did clip something to Firestore. Keep current behavior
-          // (text was set by triggerShutterEffect based on save status).
-        } catch (_) { /* silent */ }
-      })();
+      // CoreItem clip feedback lives in the per-item status_badge, NOT in a
+      // fullpage toast. We wait for the clipboard result, then write the
+      // category-aware "clipped" wording on success. Failure text is already
+      // applied automatically by triggerShutterEffect('core', 'error') via
+      // the registered _coreBadgeFailedText.
+      //
+      // Skipped entirely in relay mode — the iframe handler already drew
+      // shutter and badge text in its own Shadow DOM (Phase 11a).
+      if (window.self === window.top) {
+        (async () => {
+          try {
+            const clipboardResult = await coreClipboardPromise;
+            if (clipboardResult?.success) {
+              const successText = coreClipboardCategory === 'Image'
+                ? 'Image clipped'
+                : 'URL clipped';
+              setCoreStatusBadgeText(successText);
+            } else if (!isSignedIn()) {
+              triggerShutterEffect('core', 'error');
+            }
+            // Signed-in case where clipboard fails but save might succeed:
+            // shutter already reflects save status correctly via
+            // saveShutterStatus; "Clip failed" text would be wrong because
+            // save did clip something to Firestore. Keep current behavior
+            // (text was set by triggerShutterEffect based on save status).
+          } catch (_) { /* silent */ }
+        })();
+      }
     }
 
     if (coreOverlayEl) { coreOverlayEl.style.transition = ''; coreOverlayEl.style.opacity = '1'; }
