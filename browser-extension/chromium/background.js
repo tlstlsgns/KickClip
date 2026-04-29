@@ -284,19 +284,6 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 // Listen for keyboard shortcut command
 chrome.commands.onCommand.addListener((command) => {
   if (command === 'save-url') {
-    // Use cached login state for synchronous access — required to preserve
-    // user gesture context for chrome.sidePanel.open()
-    if (!_cachedUserId) {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs?.[0]?.id && tabs?.[0]?.windowId) {
-          chrome.sidePanel.open({
-            tabId: tabs[0].id,
-            windowId: tabs[0].windowId,
-          }).catch(() => {});
-        }
-      });
-      return;
-    }
     // IMMEDIATELY send placeholder to Electron app (before any async operations)
     // This ensures instant UI feedback
     const timestamp = Date.now();
