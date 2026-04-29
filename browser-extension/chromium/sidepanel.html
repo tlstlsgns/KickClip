@@ -1138,6 +1138,62 @@
       text-align: center;
     }
 
+    /* ── Per-category clear bar ── */
+    .sp-clear-bar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 6px 8px;
+      background: var(--bg-primary);
+      border-bottom: 1px solid var(--border-default);
+    }
+
+    .sp-clear-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      padding: 4px;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: background-color 0.15s ease, opacity 0.15s ease;
+    }
+
+    .sp-clear-btn:hover:not(:disabled) {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    .sp-clear-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .sp-clear-bar.confirm-pending .sp-clear-btn {
+      color: var(--kc-accent, #BC13FE);
+    }
+
+    .sp-clear-icon-trash,
+    .sp-clear-icon-check {
+      width: 18px;
+      height: 18px;
+    }
+
+    .sp-clear-confirm-text {
+      font-family: 'Roboto', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-right: 4px;
+    }
+
     /* ── Loading state ── */
     .sp-loading {
       display: flex;
@@ -1248,16 +1304,108 @@
       <div id="sp-itemlist-clip">
         <div id="sp-itemlist-wrap">
           <div class="sp-category-section" data-category="Img">
-            <div class="sp-category-list" data-category-list="Img"></div>
+            <div class="sp-category-list" data-category-list="Img">
+              <div class="sp-clear-bar" data-preserve-clear-bar="true">
+                <button type="button" class="sp-clear-btn" disabled
+                        aria-label="Clear all clips in this category">
+                  <svg class="sp-clear-icon-trash" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"
+                       aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"></path>
+                    <path d="M10 11v6"></path>
+                    <path d="M14 11v6"></path>
+                    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <svg class="sp-clear-icon-check" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"
+                       style="display:none;" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </button>
+                <span class="sp-clear-confirm-text" style="display:none;"></span>
+              </div>
+            </div>
           </div>
           <div class="sp-category-section" data-category="SNS">
-            <div class="sp-category-list" data-category-list="SNS"></div>
+            <div class="sp-category-list" data-category-list="SNS">
+              <div class="sp-clear-bar" data-preserve-clear-bar="true">
+                <button type="button" class="sp-clear-btn" disabled
+                        aria-label="Clear all clips in this category">
+                  <svg class="sp-clear-icon-trash" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"
+                       aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"></path>
+                    <path d="M10 11v6"></path>
+                    <path d="M14 11v6"></path>
+                    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <svg class="sp-clear-icon-check" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"
+                       style="display:none;" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </button>
+                <span class="sp-clear-confirm-text" style="display:none;"></span>
+              </div>
+            </div>
           </div>
           <div class="sp-category-section" data-category="Mail">
-            <div class="sp-category-list" data-category-list="Mail"></div>
+            <div class="sp-category-list" data-category-list="Mail">
+              <div class="sp-clear-bar" data-preserve-clear-bar="true">
+                <button type="button" class="sp-clear-btn" disabled
+                        aria-label="Clear all clips in this category">
+                  <svg class="sp-clear-icon-trash" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"
+                       aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"></path>
+                    <path d="M10 11v6"></path>
+                    <path d="M14 11v6"></path>
+                    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <svg class="sp-clear-icon-check" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"
+                       style="display:none;" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </button>
+                <span class="sp-clear-confirm-text" style="display:none;"></span>
+              </div>
+            </div>
           </div>
           <div class="sp-category-section" data-category="Pages">
-            <div class="sp-category-list" data-category-list="Pages"></div>
+            <div class="sp-category-list" data-category-list="Pages">
+              <div class="sp-clear-bar" data-preserve-clear-bar="true">
+                <button type="button" class="sp-clear-btn" disabled
+                        aria-label="Clear all clips in this category">
+                  <svg class="sp-clear-icon-trash" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"
+                       aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"></path>
+                    <path d="M10 11v6"></path>
+                    <path d="M14 11v6"></path>
+                    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <svg class="sp-clear-icon-check" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"
+                       style="display:none;" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </button>
+                <span class="sp-clear-confirm-text" style="display:none;"></span>
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -680,6 +680,7 @@ function showDashboardScreen(user) {
   loginScreen.style.display     = 'none';
   dashboardScreen.style.display = 'flex';
   setupTabHandlers();
+  attachClearButtonHandlers();
 
   // Update avatar
   if (user.photoURL) {
@@ -1319,6 +1320,7 @@ function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreens
 
   // Attach handlers
   attachCardClickHandlers();
+  updateClearButtonState(resolveItemListKey(tempItem));
 }
 
 function removeOptimisticCard(tempId) {
@@ -1400,6 +1402,177 @@ function applyOptimisticCardImage(tempId, imgUrl) {
 
   // Reflect on the card's dataset so loadData() comparisons work.
   card.dataset.imgUrl = imgUrl;
+}
+
+/**
+ * Recompute the disabled state of the clear button for a given
+ * category. The button is disabled when:
+ *  - The category list has zero .card-container elements, OR
+ *  - The category list has any OptimisticCard
+ *    (.card-container[data-optimistic-card]), OR
+ *  - The button is mid-action (data-clear-pending="true").
+ */
+function updateClearButtonState(categoryKey) {
+  const list = document.querySelector(
+    `.sp-category-list[data-category-list="${categoryKey}"]`
+  );
+  if (!list) return;
+  const btn = list.querySelector('.sp-clear-btn');
+  if (!btn) return;
+
+  const hasCards = list.querySelector('.card-container') !== null;
+  const hasOptimistic = list.querySelector('.card-container[data-optimistic-card]') !== null;
+  const isPending = btn.dataset.clearPending === 'true';
+
+  btn.disabled = !hasCards || hasOptimistic || isPending;
+}
+
+function updateAllClearButtonStates() {
+  CATEGORY_ORDER.forEach((cat) => updateClearButtonState(cat));
+}
+
+async function executeClear(categoryKey, list, btn, exitConfirmPending) {
+  if (!currentUser) {
+    exitConfirmPending();
+    return;
+  }
+
+  // Mark pending so the disabled-state recomputation keeps the button
+  // disabled during the in-flight requests.
+  btn.dataset.clearPending = 'true';
+  updateClearButtonState(categoryKey);
+
+  const cardContainers = Array.from(list.querySelectorAll('.card-container'));
+  const docIds = cardContainers
+    .map((c) => {
+      const card = c.querySelector('.data-card');
+      return card?.dataset?.docId || card?.dataset?.itemId || '';
+    })
+    .filter((id) => !!id);
+
+  // Fire all deletes in parallel. Failures are logged but otherwise
+  // ignored — sidepanel reopen will reload the actual Firestore state
+  // if anything went wrong.
+  const results = await Promise.allSettled(
+    docIds.map((docId) =>
+      fetch(
+        `${KC_SERVER_URL}/api/v1/items/${encodeURIComponent(docId)}?userId=${encodeURIComponent(currentUser.uid)}`,
+        { method: 'DELETE' }
+      )
+    )
+  );
+
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      console.error('[Clear] delete failed for', docIds[i], r.reason);
+    } else if (r.value && !r.value.ok) {
+      console.error('[Clear] delete non-ok for', docIds[i], r.value.status);
+    }
+  });
+
+  // Remove all card containers from this list's DOM.
+  cardContainers.forEach((c) => c.remove());
+
+  // Also clean up matching entries from the local optimisticCards
+  // map (if any tempIds happened to be in this category — unlikely
+  // because button is disabled while OptimisticCards exist, but be
+  // defensive).
+  for (const [tempId, entry] of optimisticCards.entries()) {
+    if (entry.cardContainer && !entry.cardContainer.isConnected) {
+      optimisticCards.delete(tempId);
+      displayedItemIds.delete(tempId);
+    }
+  }
+
+  // Recompute empty state for this category.
+  const existingEmpty = list.querySelector('.sp-empty');
+  if (!list.querySelector('.card-container') && !existingEmpty) {
+    const empty = document.createElement('div');
+    empty.className = 'sp-empty';
+    empty.textContent = 'No clips yet';
+    list.appendChild(empty);
+  }
+
+  // Reset confirm-pending and pending flag.
+  delete btn.dataset.clearPending;
+  exitConfirmPending();
+  updateClearButtonState(categoryKey);
+
+  // Toast.
+  showKcToast(`${docIds.length} clips cleared`, 'success');
+}
+
+function attachClearButtonHandlers() {
+  CATEGORY_ORDER.forEach((cat) => {
+    const list = document.querySelector(
+      `.sp-category-list[data-category-list="${cat}"]`
+    );
+    if (!list) return;
+    const bar = list.querySelector('.sp-clear-bar');
+    const btn = bar?.querySelector('.sp-clear-btn');
+    if (!bar || !btn) return;
+
+    // Avoid double-attachment.
+    if (btn.dataset.handlerAttached === 'true') return;
+    btn.dataset.handlerAttached = 'true';
+
+    const trashIcon = btn.querySelector('.sp-clear-icon-trash');
+    const checkIcon = btn.querySelector('.sp-clear-icon-check');
+    const confirmText = bar.querySelector('.sp-clear-confirm-text');
+
+    let dismissHandler = null;
+
+    const exitConfirmPending = () => {
+      bar.classList.remove('confirm-pending');
+      if (trashIcon) trashIcon.style.display = '';
+      if (checkIcon) checkIcon.style.display = 'none';
+      if (confirmText) {
+        confirmText.style.display = 'none';
+        confirmText.textContent = '';
+      }
+      if (dismissHandler) {
+        document.removeEventListener('click', dismissHandler, true);
+        dismissHandler = null;
+      }
+    };
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (btn.disabled) return;
+
+      if (!bar.classList.contains('confirm-pending')) {
+        // First click: enter confirm-pending.
+        const cardCount = list.querySelectorAll('.card-container').length;
+        if (cardCount === 0) return;
+
+        bar.classList.add('confirm-pending');
+        if (trashIcon) trashIcon.style.display = 'none';
+        if (checkIcon) checkIcon.style.display = '';
+        if (confirmText) {
+          confirmText.textContent = `Really delete ${cardCount} clips?`;
+          confirmText.style.display = '';
+        }
+
+        // Document-level dismiss listener (capture phase).
+        dismissHandler = (dismissEvent) => {
+          // Click on this same button — let it through to execute.
+          if (dismissEvent.target.closest('.sp-clear-btn') === btn) return;
+          exitConfirmPending();
+        };
+        // Attach on next microtask so the current click event doesn't
+        // immediately dismiss.
+        setTimeout(() => {
+          if (dismissHandler) {
+            document.addEventListener('click', dismissHandler, true);
+          }
+        }, 0);
+        return;
+      }
+
+      // Second click: execute the bulk delete.
+      executeClear(cat, list, btn, exitConfirmPending);
+    });
+  });
 }
 
 // ── Button event listeners ────────────────────────────────────────────────────
@@ -2023,6 +2196,7 @@ function attachDeleteHandlers(container) {
               { method: 'DELETE' }
             ).catch((err) => console.error('[Delete]', err));
             cardContainer.remove();
+            updateAllClearButtonStates();
           }, 250);
         }
       }
@@ -2649,7 +2823,11 @@ function loadData() {
     const list = document.querySelector(`.sp-category-list[data-category-list="${cat}"]`);
     if (!list) return;
     Array.from(list.children).forEach((child) => {
-      if (child.dataset?.preserveAnimation || child.dataset?.optimisticCard) return;
+      if (
+        child.dataset?.preserveAnimation
+        || child.dataset?.optimisticCard
+        || child.dataset?.preserveClearBar === 'true'
+      ) return;
       const dockCard = child.querySelector?.('.data-card');
       const cid = dockCard?.dataset?.itemId;
       if (cid && preserveItemIds.has(cid)) return;
@@ -2809,13 +2987,23 @@ function loadData() {
     if (isNew) animateEntrance(container, wrapper);
   });
 
-  // ── Empty state ──────────────────────────────────────────────────────────
-  if (currentItems.length === 0 && optimisticCards.size === 0) {
-    const empty = document.createElement('div');
-    empty.className   = 'sp-empty';
-    empty.textContent = 'No saved items yet.\nUse Cmd+Shift+S to save.';
-    document.querySelector('.sp-category-list')?.appendChild(empty);
-  }
+  // Per-category empty state
+  CATEGORY_ORDER.forEach((cat) => {
+    const list = document.querySelector(`.sp-category-list[data-category-list="${cat}"]`);
+    if (!list) return;
+    const hasCards = list.querySelector('.card-container') !== null;
+    const existingEmpty = list.querySelector('.sp-empty');
+    if (hasCards) {
+      if (existingEmpty) existingEmpty.remove();
+    } else if (!existingEmpty) {
+      const empty = document.createElement('div');
+      empty.className = 'sp-empty';
+      empty.textContent = 'No clips yet';
+      list.appendChild(empty);
+    }
+  });
+
+  updateAllClearButtonStates();
 
   // ── Attach handlers ──────────────────────────────────────────────────────
   attachCardClickHandlers();
@@ -2924,6 +3112,7 @@ function reconcileSnapshotSilently(snap) {
     optimisticCards.delete(matchedTempId);
     displayedItemIds.delete(matchedTempId);
     displayedItemIds.add(realItemId);
+    updateClearButtonState(resolveItemListKey(item));
 
     // NOTE: deliberately no appendChild, no updateCardImage. The
     // visible <img> keeps its base64 src; the dataset.imgUrl is the
