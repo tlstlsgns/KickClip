@@ -335,6 +335,10 @@ async function upsertUserProfile(user) {
 let currentUser        = null;
 let unsubscribeItems   = null;
 let unsubscribeDirs    = null;
+// Phase 12h: subsequent item snapshots after the first only update
+// dataset/tracking, not DOM layout. Reset to true in stopListeners
+// so a fresh sidepanel session does a full initial render.
+let isFirstItemsSnapshot = true;
 let isSyncing          = false;
 let isDragging         = false;
 let lastDragEndTime    = 0;
@@ -713,10 +717,22 @@ function startListeners(userId) {
   unsubscribeItems = onSnapshot(itemsQ, (snap) => {
     currentItems = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
     syncSavedUrlsToSession(currentItems);
-    if (!isSyncing) loadData();
-    // Re-render ai board if active card's data was updated
-    // AI board disabled
-    // if (activeCardItemId) showAiBoardForItem(activeCardItemId);
+
+    if (isFirstItemsSnapshot) {
+      // Initial render — full loadData (also handles previously-saved
+      // items on sidepanel reopen).
+      isFirstItemsSnapshot = false;
+      if (!isSyncing) loadData();
+      return;
+    }
+
+    // Subsequent snapshots: silently reconcile new docs against
+    // OptimisticCards. No DOM layout work — that path causes <img>
+    // reload flashes on base64 dataURLs. Cross-device additions/
+    // modifications/removals will be picked up when the sidepanel is
+    // reopened (multi-device concurrent use is currently out of scope).
+    if (isSyncing) return;
+    reconcileSnapshotSilently(snap);
   }, (err) => {
     console.error('[Firestore] items error:', err);
   });
@@ -728,6 +744,7 @@ function stopListeners() {
   currentItems       = [];
   currentDirectories = [];
   displayedItemIds   = new Set();
+  isFirstItemsSnapshot = true;
   syncSavedUrlsToSession([]);
 }
 
@@ -2816,6 +2833,103 @@ function loadData() {
     insertTimelineDividers(listEl, itemsForList);
   });
 
+}
+
+/**
+ * Silently reconcile a Firestore snapshot's added docs against
+ * existing OptimisticCards. Updates identifiers and tracking maps
+ * so user actions (delete, move) work — but does NOT touch DOM
+ * layout (no appendChild, no element removal, no <img> swap).
+ *
+ * Called for all item snapshots AFTER the first. The first snapshot
+ * goes through the full loadData() path for initial render.
+ *
+ * Behavior by docChange.type:
+ * - 'added': try to match an existing OptimisticCard. If matched,
+ *   promote it silently (dataset + map cleanup). If unmatched, skip
+ *   (cross-device addition — out of scope until sidepanel reopens).
+ * - 'modified': skip. The OptimisticCard already shows what the user
+ *   clipped; server-side modifications don't currently happen on
+ *   visible fields. Cross-device modifications fall under the same
+ *   sidepanel-reopen contract as 'added' unmatched.
+ * - 'removed': skip. Cross-device deletions wait for sidepanel
+ *   reopen.
+ *
+ * The visible <img> on a promoted OptimisticCard keeps its base64
+ * dataURL src. dataset.imgUrl is updated to the server's https URL
+ * so future state checks reference the canonical URL, but the
+ * visible src is left alone — swapping would trigger the very
+ * <img> reload flash this whole approach is designed to avoid.
+ * On sidepanel reopen, the card is rendered fresh from Firestore
+ * with the https URL.
+ */
+function reconcileSnapshotSilently(snap) {
+  if (!currentUser) return;
+
+  snap.docChanges().forEach((change) => {
+    if (change.type !== 'added') return;
+
+    const item = { ...change.doc.data(), id: change.doc.id };
+
+    // Match against OptimisticCards: temp_id first, URL fallback.
+    let matchedTempId = null;
+    const itemTempId = String(item.temp_id || '').trim();
+    if (itemTempId && optimisticCards.has(itemTempId)) {
+      matchedTempId = itemTempId;
+    } else {
+      for (const [tempId, entry] of optimisticCards.entries()) {
+        if (entry.url === item.url) {
+          matchedTempId = tempId;
+          break;
+        }
+      }
+    }
+
+    if (!matchedTempId) {
+      // Unmatched — could be a cross-device addition we don't render
+      // mid-session. Sidepanel reopen will pick it up via the first-
+      // snapshot loadData path.
+      return;
+    }
+
+    const optimisticEntry = optimisticCards.get(matchedTempId);
+    const existingContainer = optimisticEntry?.cardContainer;
+    const existingCard = existingContainer?.querySelector('.data-card');
+    if (!existingCard) {
+      // Tracked but DOM-detached — clean up the map entry and move
+      // on. The sidepanel reopen will re-render from Firestore.
+      optimisticCards.delete(matchedTempId);
+      displayedItemIds.delete(matchedTempId);
+      return;
+    }
+
+    // ── Identifier & dataset promotion (no DOM layout) ──
+    const realItemId = getItemId(item);
+    existingCard.id              = `item-${realItemId.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    existingCard.dataset.itemId  = realItemId;
+    existingCard.dataset.docId   = item.id || '';
+    existingCard.dataset.url     = item.url || '';
+    existingCard.dataset.title   = item.title || 'Untitled';
+    if (item.img_url) {
+      existingCard.dataset.imgUrl = item.img_url;
+    }
+
+    kcCardItemByEl.set(existingCard, item);
+
+    // Remove optimistic marker so this container is treated as a
+    // real-rendered card by any future code path.
+    delete existingContainer.dataset.optimisticCard;
+
+    // Tracking maps
+    optimisticCards.delete(matchedTempId);
+    displayedItemIds.delete(matchedTempId);
+    displayedItemIds.add(realItemId);
+
+    // NOTE: deliberately no appendChild, no updateCardImage. The
+    // visible <img> keeps its base64 src; the dataset.imgUrl is the
+    // canonical reference for any future logic that needs the
+    // server URL.
+  });
 }
 
 // Notify content script via background when Side Panel gains or loses focus.
