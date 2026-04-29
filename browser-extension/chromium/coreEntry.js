@@ -146,11 +146,11 @@ function initPageLevelMetadata() {
 }
 
 /**
- * Shows a page-entry toast based on current login state.
- * - Signed in: "{shortcut} to save this page"
- * - Signed out: "Press {shortcut} to start KickClip"
+ * Shows a page-entry toast when signed in: "{shortcut} to save this page".
+ * No-op when signed out (explore + clipboard-only mode; no entry toast).
  */
 function showFullpageEntryToast() {
+  if (!_kcUserReady) return;
   // Read the cached shortcut from storage (written by background.js
   // runShortcutPoll) to avoid an async sendMessage round-trip that
   // would cause the text to arrive late.
@@ -169,17 +169,12 @@ function showFullpageEntryToast() {
               .replace(/Alt/gi, '⌥')
               .replace(/\+/g, '')
           : raw;
-        const message = _kcUserReady
-          ? `${display} to save this page`
-          : `Press ${display} to start KickClip`;
+        const message = `${display} to save this page`;
         renderFullpageEntryToast(message);
       } catch (e) {}
     });
   } catch (e) {
-    const fallback = _kcUserReady
-      ? 'Press shortcut to save this page'
-      : 'Press shortcut to start KickClip';
-    try { renderFullpageEntryToast(fallback); } catch (_) {}
+    try { renderFullpageEntryToast('Press shortcut to save this page'); } catch (_) {}
   }
 }
 
@@ -2596,10 +2591,6 @@ function mountSaveMessageListener() {
       return false;
     }
     if (request?.action !== 'save-url') return false;
-    if (!_kcUserReady) {
-      sendResponse({ success: false, reason: 'not-signed-in' });
-      return false;
-    }
 
     // Iframes must never handle save-url directly — only via KC_SAVE_QUERY postMessage.
     // Fetching localhost from a cross-origin iframe is blocked by CORS.
@@ -2807,7 +2798,6 @@ function mountWindowListeners() {
   }, { passive: true, capture: true });
   window.addEventListener('resize', () => schedulePreScan(document, false, 'window-resize'), { passive: true });
   window.addEventListener('mouseover', async (e) => {
-    if (!_kcUserReady) return;
     if (!_windowFocused) return;
     lastPointerX = e?.clientX ?? lastPointerX;
     lastPointerY = e?.clientY ?? lastPointerY;
