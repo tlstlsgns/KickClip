@@ -79,6 +79,20 @@ const KC_SAVE_QUERY = '__kc_save_query__';
 const KC_SAVE_HANDLED = '__kc_save_handled__';
 const KC_SAVE_RELAY = '__kc_save_relay__';
 
+/**
+ * KickClip UI element IDs that must be hidden during screenshot capture
+ * so they don't appear in the captured image. Includes overlays, the
+ * metadata tooltip, the candidate-outline layer, and the entry toast.
+ * Single source of truth — every capture path reads from here.
+ */
+const KC_CAPTURE_HIDE_IDS = [
+  'kickclip-highlight-overlay',
+  'kickclip-metadata-tooltip',
+  'kickclip-green-candidate-layer',
+  'kickclip-fullpage-highlight-overlay',
+  'kickclip-fullpage-entry-toast',
+];
+
 /** Metadata tooltip id — hidden briefly during save (shutter uses overlay fills in uiManager). */
 const METADATA_TOOLTIP_ID = 'kickclip-metadata-tooltip';
 const SAVE_FEEDBACK_KC_MIN_MS = 80;
@@ -186,6 +200,7 @@ function renderFullpageEntryToast(message) {
   try {
     hideFullpageEntryToast();
     const toast = document.createElement('div');
+    toast.id = 'kickclip-fullpage-entry-toast';
     toast.textContent = message;
     toast.style.cssText = [
       'position: fixed',
@@ -404,14 +419,8 @@ async function captureScreenshotBase64(element) {
     const rect = element.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) return null;
 
-    const KC_UI_IDS = [
-      'kickclip-highlight-overlay',
-      'kickclip-metadata-tooltip',
-      'kickclip-green-candidate-layer',
-      'kickclip-fullpage-highlight-overlay',
-    ];
     const hiddenEls = [];
-    for (const id of KC_UI_IDS) {
+    for (const id of KC_CAPTURE_HIDE_IDS) {
       try {
         const el = findKCElement(id);
         if (el && el.style.display !== 'none') {
@@ -513,16 +522,9 @@ async function captureScreenshotBase64(element) {
 }
 
 async function capturePageScreenshotBase64() {
-  const KC_UI_IDS = [
-    'kickclip-highlight-overlay',
-    'kickclip-metadata-tooltip',
-    'kickclip-green-candidate-layer',
-    'kickclip-fullpage-highlight-overlay',
-  ];
-
   // Temporarily hide KickClip UI elements
   const hiddenEls = [];
-  for (const id of KC_UI_IDS) {
+  for (const id of KC_CAPTURE_HIDE_IDS) {
     try {
       const el = findKCElement(id);
       if (el && el.style.display !== 'none') {
@@ -653,16 +655,9 @@ async function capturePageScreenshotBase64() {
  * Returns: { rawDataUrl: string } | null
  */
 async function capturePageScreenshotRaw() {
-  const KC_UI_IDS = [
-    'kickclip-highlight-overlay',
-    'kickclip-metadata-tooltip',
-    'kickclip-green-candidate-layer',
-    'kickclip-fullpage-highlight-overlay',
-  ];
-
   // Temporarily hide KickClip UI elements
   const hiddenEls = [];
-  for (const id of KC_UI_IDS) {
+  for (const id of KC_CAPTURE_HIDE_IDS) {
     try {
       const el = findKCElement(id);
       if (el && el.style.display !== 'none') {
@@ -1826,6 +1821,15 @@ async function saveActiveCoreItem(request = {}) {
         }
       }
 
+      // Capture is done. Restore the fullpage overlay + status badge right now,
+      // BEFORE any other async work (userId, fetch-metadata, optimistic card,
+      // shutter effect, toast). This keeps the perceived "screen blank" window
+      // to just the capture itself, and ensures triggerShutterEffect below is
+      // visible against the restored overlay. Stage 2 post-processing
+      // (screenshotProcessPromise) continues independently.
+      if (pageOverlayEl) { pageOverlayEl.style.transition = ''; pageOverlayEl.style.opacity = '1'; }
+      if (pageBadgeEl)   { pageBadgeEl.style.transition = '';   pageBadgeEl.style.opacity = ''; }
+
       // Stage 2: post-process the raw screenshot (bg color + crop) in parallel
       // with other async work (userId, fetch-metadata, etc.). Await result at
       // payload construction time.
@@ -1967,8 +1971,6 @@ async function saveActiveCoreItem(request = {}) {
         })();
       }
 
-      if (pageOverlayEl) { pageOverlayEl.style.transition = ''; pageOverlayEl.style.opacity = '1'; }
-      if (pageBadgeEl)   { pageBadgeEl.style.transition = '';   pageBadgeEl.style.opacity = ''; }
       resetFullPageHideTimer();
 
       // Await Stage 2 post-processing result — started in parallel earlier.
