@@ -899,9 +899,6 @@ function createDataCard(item) {
   const escapedTitle = displayTitle.replace(/"/g, '&quot;');
   const imgUrl       = (item.img_url || '').trim();
   const escapedImgUrl = imgUrl.replace(/"/g, '&quot;');
-  const screenshotBgColor = (item.screenshot_bg_color || '').trim();
-  const screenshotPadding = typeof item.screenshot_padding === 'number' && item.screenshot_padding > 0
-    ? item.screenshot_padding : 0;
   const confirmedType = (item.confirmed_type || item.confirmedType || '').trim();
   const pageDescription = String(item.page_description || '');
   const imgUrlMethod = String(item.img_url_method || '');
@@ -1066,11 +1063,7 @@ function createDataCard(item) {
       </div>
       <div class="data-card-main">
         ${imgUrl ? `
-        <div class="data-card-imgcontainer"${(() => {
-    const styles = [];
-    if (screenshotPadding > 0) styles.push(`padding-left:${screenshotPadding}px;padding-right:${screenshotPadding}px;padding-top:${screenshotPadding}px`);
-    return styles.length > 0 ? ` style="${styles.join(';')}"` : '';
-  })()}>
+        <div class="data-card-imgcontainer">
           <img src="${getProxiedImageUrl(imgUrl)}" alt="${escapedTitle}" class="data-card-image">
         </div>` : ''}
       </div>`}
@@ -1219,7 +1212,7 @@ function animateEntrance(container, wrapper) {
 }
 
 // ── Optimistic UI ─────────────────────────────────────────────────────────────
-function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreenshotFlag, screenshotPadding, screenshotBgColor, category, platform, confirmedType, sender, pageDescription, imgUrlMethod, createdAt }) {
+function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreenshotFlag, category, platform, confirmedType, sender, pageDescription, imgUrlMethod, createdAt }) {
   if (!currentUser) return;
 
   // Deduplication: ignore if a temp card with same tempId already exists
@@ -1246,9 +1239,6 @@ function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreens
     platform:        platform      || '',
     confirmed_type:  confirmedType || '',
     sender:            sender           || '',
-    screenshot_padding:   typeof screenshotPadding === 'number' && screenshotPadding > 0
-      ? screenshotPadding : 0,
-    screenshot_bg_color:  screenshotBgColor || '',
     page_description: pageDescription || '',
     img_url_method:   imgUrlMethod || '',
     createdAt: typeof createdAt === 'number' ? createdAt : Date.now(),
@@ -2492,7 +2482,7 @@ function renderDirectories() {
   if (currentItems.length > 0) loadData();
 }
 
-function updateCardImage(cardEl, newImgUrl, screenshotBgColor) {
+function updateCardImage(cardEl, newImgUrl) {
   try {
     const imgContainer = cardEl.querySelector('.data-card-imgcontainer');
     const imgEl = cardEl.querySelector('.data-card-image');
@@ -2676,8 +2666,7 @@ function loadData() {
           if (hasImgContainer) {
             updateCardImage(
               existingCard,
-              nextImgUrl,
-              (itemToRender.screenshot_bg_color || '').trim()
+              nextImgUrl
             );
           } else {
             existingCard.closest('.card-container')?.remove();
@@ -2806,9 +2795,6 @@ if (chrome?.runtime?.onMessage) {
         title:             message.title,
         imgUrl:            message.imgUrl || '',
         isScreenshot:      !!message.isScreenshot,
-        screenshotPadding: typeof message.screenshotPadding === 'number'
-          ? message.screenshotPadding : 0,
-        screenshotBgColor: message.screenshotBgColor || '',
         category:          message.category      || '',
         platform:          message.platform      || '',
         confirmedType:     message.confirmedType || '',

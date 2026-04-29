@@ -541,7 +541,6 @@ async function captureScreenshotBase64(element) {
       await new Promise((resolve) => setTimeout(resolve, 32));
 
       let dataUrl = null;
-      let backgroundColor = '#ffffff';
       try {
         const result = await new Promise((resolve) => {
           try {
@@ -585,30 +584,12 @@ async function captureScreenshotBase64(element) {
         );
         dataUrl = canvas.toDataURL('image/jpeg', 0.8);
 
-        // Sample background color from the cropped canvas pixels.
-        // Average the RGB values of 3 corners (top-left, top-right, bottom-left)
-        // to get a representative background color, avoiding content-heavy center.
-        try {
-          const cw = canvas.width;
-          const ch = canvas.height;
-          const samples = [
-            ctx.getImageData(0, 0, 1, 1).data, // top-left
-            ctx.getImageData(cw - 1, 0, 1, 1).data, // top-right
-            ctx.getImageData(0, ch - 1, 1, 1).data, // bottom-left
-          ];
-          const avgR = Math.round(samples.reduce((s, p) => s + p[0], 0) / samples.length);
-          const avgG = Math.round(samples.reduce((s, p) => s + p[1], 0) / samples.length);
-          const avgB = Math.round(samples.reduce((s, p) => s + p[2], 0) / samples.length);
-          backgroundColor = `rgb(${avgR},${avgG},${avgB})`;
-        } catch (_) {
-          backgroundColor = '#ffffff';
-        }
       } catch (e) {
         dataUrl = null;
       }
 
       if (!dataUrl) return null;
-      return { dataUrl, backgroundColor };
+      return { dataUrl };
     } finally {
       _isCapturing = false;
       for (const { el, prevOpacity, prevTransition } of hiddenEls) {
@@ -662,38 +643,6 @@ async function capturePageScreenshotBase64() {
 
     const dpr = window.devicePixelRatio || 1;
 
-    // Sample background color from 3 corners of the captured full-page image.
-    // Uses pixel sampling instead of DOM computed style for accuracy.
-    let backgroundColor = '#ffffff';
-    try {
-      const fullImg = await new Promise((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error('img load failed'));
-        image.src = result.dataUrl;
-      });
-      const sampleCanvas = document.createElement('canvas');
-      sampleCanvas.width  = fullImg.naturalWidth  || fullImg.width;
-      sampleCanvas.height = fullImg.naturalHeight || fullImg.height;
-      const sCtx = sampleCanvas.getContext('2d');
-      if (sCtx) {
-        sCtx.drawImage(fullImg, 0, 0);
-        const cw = sampleCanvas.width;
-        const ch = sampleCanvas.height;
-        const samples = [
-          sCtx.getImageData(0, 0, 1, 1).data,
-          sCtx.getImageData(cw - 1, 0, 1, 1).data,
-          sCtx.getImageData(0, ch - 1, 1, 1).data,
-        ];
-        const avgR = Math.round(samples.reduce((s, p) => s + p[0], 0) / samples.length);
-        const avgG = Math.round(samples.reduce((s, p) => s + p[1], 0) / samples.length);
-        const avgB = Math.round(samples.reduce((s, p) => s + p[2], 0) / samples.length);
-        backgroundColor = `rgb(${avgR},${avgG},${avgB})`;
-      }
-    } catch (_) {
-      backgroundColor = '#ffffff';
-    }
-
     // Crop out scrollbars if present.
     // clientWidth/clientHeight excludes scrollbars; innerWidth/innerHeight includes them.
     // If they differ, the difference is the scrollbar thickness — crop the image accordingly.
@@ -718,7 +667,7 @@ async function capturePageScreenshotBase64() {
           if (cropCtx) {
             cropCtx.drawImage(fullImg, 0, 0);
             const croppedDataUrl = cropCanvas.toDataURL('image/jpeg', 0.8);
-            return { dataUrl: croppedDataUrl, backgroundColor };
+            return { dataUrl: croppedDataUrl };
           }
         }
       } catch (_) {
@@ -726,7 +675,7 @@ async function capturePageScreenshotBase64() {
       }
     }
 
-    return { dataUrl: result.dataUrl, backgroundColor };
+    return { dataUrl: result.dataUrl };
   } finally {
     _isCapturing = false;
     // Always restore KickClip UI elements
@@ -812,45 +761,13 @@ async function capturePageScreenshotRaw() {
 
 /**
  * Stage 2: post-process a raw screenshot dataUrl:
- *   - sample background color from 3 corners
  *   - crop out scrollbars if present
- * Returns: { dataUrl, backgroundColor }
+ * Returns: { dataUrl }
  */
 async function processPageScreenshot(rawDataUrl) {
   if (!rawDataUrl) return null;
 
   const dpr = window.devicePixelRatio || 1;
-
-  // Sample background color from 3 corners of the captured full-page image.
-  let backgroundColor = '#ffffff';
-  try {
-    const fullImg = await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error('img load failed'));
-      image.src = rawDataUrl;
-    });
-    const sampleCanvas = document.createElement('canvas');
-    sampleCanvas.width  = fullImg.naturalWidth  || fullImg.width;
-    sampleCanvas.height = fullImg.naturalHeight || fullImg.height;
-    const sCtx = sampleCanvas.getContext('2d');
-    if (sCtx) {
-      sCtx.drawImage(fullImg, 0, 0);
-      const cw = sampleCanvas.width;
-      const ch = sampleCanvas.height;
-      const samples = [
-        sCtx.getImageData(0, 0, 1, 1).data,
-        sCtx.getImageData(cw - 1, 0, 1, 1).data,
-        sCtx.getImageData(0, ch - 1, 1, 1).data,
-      ];
-      const avgR = Math.round(samples.reduce((s, p) => s + p[0], 0) / samples.length);
-      const avgG = Math.round(samples.reduce((s, p) => s + p[1], 0) / samples.length);
-      const avgB = Math.round(samples.reduce((s, p) => s + p[2], 0) / samples.length);
-      backgroundColor = `rgb(${avgR},${avgG},${avgB})`;
-    }
-  } catch (_) {
-    backgroundColor = '#ffffff';
-  }
 
   // Crop out scrollbars if present.
   const scrollbarX = Math.max(0, Math.round((window.innerWidth  - document.documentElement.clientWidth)  * dpr));
@@ -874,7 +791,7 @@ async function processPageScreenshot(rawDataUrl) {
         if (cropCtx) {
           cropCtx.drawImage(fullImg, 0, 0);
           const croppedDataUrl = cropCanvas.toDataURL('image/jpeg', 0.8);
-          return { dataUrl: croppedDataUrl, backgroundColor };
+          return { dataUrl: croppedDataUrl };
         }
       }
     } catch (_) {
@@ -882,7 +799,7 @@ async function processPageScreenshot(rawDataUrl) {
     }
   }
 
-  return { dataUrl: rawDataUrl, backgroundColor };
+  return { dataUrl: rawDataUrl };
 }
 
 function withInstagramActiveHoverUrl(meta = {}, coreItem = null, cachedExtraction = null) {
@@ -2030,8 +1947,6 @@ async function saveActiveCoreItem(request = {}) {
             title:              title || url,
             imgUrl:             isYouTubeSave ? youtubeThumbnailUrl : (rawScreenshotDataUrl || ''),
             isScreenshot:       !isYouTubeSave && !!rawScreenshotDataUrl,
-            screenshotPadding:  0,
-            screenshotBgColor:  '',
             category:           pageCategory || '',
             platform:           pagePlatform || '',
             confirmedType:      pageConfirmedType || '',
@@ -2076,7 +1991,6 @@ async function saveActiveCoreItem(request = {}) {
       // By now, it has likely completed while userId/fetch-metadata/etc. ran.
       const processedScreenshot = await screenshotProcessPromise;
       const pageScreenshotBase64 = processedScreenshot?.dataUrl || null;
-      const pageScreenshotBgColor = processedScreenshot?.backgroundColor || null;
 
       const payload = {
         url,
@@ -2087,7 +2001,6 @@ async function saveActiveCoreItem(request = {}) {
         page_save: true,
         ...(tempId ? { temp_id: tempId } : {}),
         ...(pageScreenshotBase64 ? { screenshot_base64: pageScreenshotBase64 } : {}),
-        ...(pageScreenshotBgColor ? { screenshot_bg_color: pageScreenshotBgColor } : {}),
         ...(pageCategory      ? { category:       pageCategory }      : {}),
         ...(pagePlatform      ? { platform:        pagePlatform }      : {}),
         ...(pageConfirmedType ? { confirmed_type:  pageConfirmedType } : {}),
@@ -2436,8 +2349,6 @@ async function saveActiveCoreItem(request = {}) {
           title:              title || url,
           imgUrl:             faviconImgUrl || '',
           isScreenshot:       false,
-          screenshotPadding:  0,
-          screenshotBgColor:  '',
           category:           String(meta?.category      || '').trim(),
           platform:           String(meta?.platform      || '').trim(),
           confirmedType:      String(meta?.confirmedType || '').trim(),
@@ -2752,7 +2663,6 @@ function mountSaveMessageListener() {
                 confirmedType: iframeRelayData.confirmedType || '',
                 image: iframeRelayData.imgUrl ? { url: iframeRelayData.imgUrl } : null,
                 _screenshotBase64: iframeRelayData.screenshotBase64 || null,
-                _screenshotBgColor: iframeRelayData.screenshotBgColor || null,
                 _overlayRatio: Number.isFinite(iframeRelayData.overlay_ratio)
                   ? iframeRelayData.overlay_ratio
                   : null,
@@ -2830,12 +2740,10 @@ function mountSaveMessageListener() {
             const imgUrl = String(meta?.image?.url || '').trim();
 
             let screenshotBase64 = null;
-            let screenshotBgColor = null;
             if (!imgUrl && activeItem && activeItem.nodeType === 1) {
               const screenshotResult = await captureScreenshotBase64(activeItem);
               if (screenshotResult) {
                 screenshotBase64 = screenshotResult.dataUrl;
-                screenshotBgColor = screenshotResult.backgroundColor;
               }
             }
 
@@ -2860,7 +2768,6 @@ function mountSaveMessageListener() {
                 title: String(meta?.title || '').trim(),
                 imgUrl,
                 screenshotBase64,
-                screenshotBgColor,
                 category: String(meta?.category || '').trim(),
                 platform: String(meta?.platform || '').trim(),
                 confirmedType: String(meta?.confirmedType || '').trim(),
