@@ -635,12 +635,7 @@ async function capturePageScreenshotBase64() {
     try {
       const currentActive = state.activeCoreItem;
       if (currentActive && currentActive.nodeType === 1) {
-        showCoreHighlight(
-          currentActive,
-          checkIsSavedSync(
-            String(state.lastExtractedMetadata?.activeHoverUrl || state.activeHoverUrl || '')
-          )
-        );
+        showCoreHighlight(currentActive);
       }
     } catch (e) {}
   }
@@ -712,12 +707,7 @@ async function capturePageScreenshotRaw() {
     try {
       const currentActive = state.activeCoreItem;
       if (currentActive && currentActive.nodeType === 1) {
-        showCoreHighlight(
-          currentActive,
-          checkIsSavedSync(
-            String(state.lastExtractedMetadata?.activeHoverUrl || state.activeHoverUrl || '')
-          )
-        );
+        showCoreHighlight(currentActive);
       }
     } catch (e) {}
   }
@@ -3060,7 +3050,7 @@ async function checkKcUserAndInit() {
     _kcUserReady = false;
   }
   // Always mount lifecycle regardless of login state.
-  // CoreItem features are gated by _kcUserReady inside their handlers.
+  // Hover/detection runs signed-out; server save / optimistic UI use isSignedIn().
   mountLifecycle();
   window.__kcMainLoaded = true;
   mountKcAuthWatcher();
