@@ -2729,7 +2729,12 @@ function mountSaveMessageListener() {
           const saveFeedbackHidden = hideKCSaveFeedbackUi();
           const saveKickClipStartedAt = Date.now();
           try {
-            const saveShutterStatus = await resolveSaveShutterStatus();
+            // Signed-out users get clipboard-only treatment in the top frame
+            // (Phase 2). Force success shutter here so the iframe's visual matches —
+            // no userId/server check is meaningful when no save will be attempted.
+            const saveShutterStatus = isSignedIn()
+              ? await resolveSaveShutterStatus()
+              : 'success';
             triggerShutterEffect('core', saveShutterStatus);
             await waitForRepaint();
 
