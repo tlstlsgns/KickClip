@@ -2540,11 +2540,17 @@ async function performClipboardCopy(category, url, rootElementForDominant) {
  * Build a Toast message based on category, confirmedType, and combined
  * copy/save success state.
  *
+ * `saveSuccess` contract:
+ *   - `true`  → server save succeeded (signed-in path).
+ *   - `false` → either no save was attempted (e.g. signed-out clipboard-only)
+ *               or save did not succeed; in both cases, when `copySuccess`
+ *               is true we show copy-only text (no "& saved", no "(save failed)").
+ *
  * Matrix:
- *   both ✓         → "{subject} copied & saved"
- *   copy ✓ save ✗  → "{subject} copied\n(save failed)"
+ *   copy ✓ save ✓  → "{subject} copied & saved"
+ *   copy ✓ save ✗  → "{subject} copied"
  *   copy ✗ save ✓  → "{subject} saved\n(copy failed)"
- *   both ✗         → "Failed"  (category-independent)
+ *   copy ✗ save ✗  → "Failed"  (category-independent)
  *
  * Subject per category:
  *   Image → "Image"
@@ -2567,7 +2573,7 @@ function buildToastMessage(category, confirmedType, copySuccess, saveSuccess) {
   }
 
   if (copySuccess && saveSuccess) return `${subject} copied & saved`;
-  if (copySuccess && !saveSuccess) return `${subject} copied\n(save failed)`;
+  if (copySuccess && !saveSuccess) return `${subject} copied`;
   return `${subject} saved\n(copy failed)`;
 }
 
