@@ -554,6 +554,21 @@ function resolveItemListKey(item) {
 }
 
 /**
+ * Normalize the client-internal category value for dedup comparison.
+ * Client uses 'Image' but server stores 'Img'. addOptimisticCard
+ * receives 'Image' from the clip pipeline, but currentItems
+ * (read from Firestore) holds 'Img'. Normalize to the server's
+ * value so both sides compare apples-to-apples.
+ *
+ * Phase 18b: must mirror the server-side dedup criteria in
+ * functions/src/index.ts (Phase 18a). Keep this in sync if either
+ * mapping changes.
+ */
+function normalizeCategoryForDedup(c) {
+  return c === 'Image' ? 'Img' : c;
+}
+
+/**
  * Returns a JS Date from a Firestore item's createdAt field.
  * Handles Firestore Timestamp objects ({ seconds, nanoseconds })
  * and raw millisecond numbers. Returns null if unavailable.
@@ -1290,6 +1305,87 @@ function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreens
     if (entry.url === url) return;
   }
 
+  // Phase 18b: client-side dedup pre-check against existing
+  // DataCards. If the clip matches an existing item under the
+  // server's dedup criteria, reorder that card to the top instead
+  // of creating a new OptimisticCard. Mirrors the server logic in
+  // functions/src/index.ts (Phase 18a).
+  //
+  // Also re-checks optimisticCards against the full criteria
+  // (the URL-only check above doesn't cover img_url for image
+  // categories, so a same-URL different-image clip wouldn't have
+  // been caught — and we want consistency with the server here).
+  const incomingCategory = normalizeCategoryForDedup(category);
+  const incomingConfirmedType = confirmedType || '';
+  const incomingUrl = url || '';
+  const incomingImgUrl = imgUrl || '';
+  const dedupRequiresImgUrl =
+    incomingCategory === 'Img' ||
+    (incomingCategory === 'SNS' && incomingConfirmedType === 'contents');
+
+  // Search optimisticCards map for a stricter match.
+  // (Returns early without further work — duplicate optimistic
+  // entries are still suppressed.)
+  for (const [, entry] of optimisticCards.entries()) {
+    if ((entry.url || '') !== incomingUrl) continue;
+    if (dedupRequiresImgUrl) {
+      if ((entry.imgUrl || '') !== incomingImgUrl) continue;
+    }
+    return; // Same-content optimistic card already pending.
+  }
+
+  // Search currentItems (server-backed) for a match.
+  const matchingItem = currentItems.find((it) => {
+    const itemUrl = typeof it.url === 'string' ? it.url : '';
+    if (itemUrl !== incomingUrl) return false;
+    const itemCat = normalizeCategoryForDedup(it.category);
+    const itemConfirmedType = typeof it.confirmed_type === 'string' ?
+      it.confirmed_type : '';
+    const itemRequiresImgUrl =
+      itemCat === 'Img' ||
+      (itemCat === 'SNS' && itemConfirmedType === 'contents');
+    // Both sides must agree on the criteria. Mismatch (rare —
+    // would mean the same URL was clipped under different
+    // categories) means we don't dedup; let server decide.
+    if (itemRequiresImgUrl !== dedupRequiresImgUrl) return false;
+    if (itemRequiresImgUrl) {
+      const itemImgUrl = typeof it.img_url === 'string' ? it.img_url : '';
+      if (itemImgUrl !== incomingImgUrl) return false;
+    }
+    return true;
+  });
+
+  if (matchingItem) {
+    // Found an existing DataCard. Reorder to top of its category list.
+    const targetTabKey = resolveItemListKey(matchingItem);
+    if (targetTabKey !== _activeTab) {
+      setActiveTab(targetTabKey);
+    }
+    const targetList = getCategoryList(targetTabKey);
+    if (targetList) {
+      const card = targetList.querySelector(
+        `[data-doc-id="${matchingItem.id}"]`
+      );
+      if (card) {
+        const todayDivider = targetList.querySelector(
+          '.sp-timeline-divider[data-timeline-label="Today"]'
+        );
+        if (todayDivider && todayDivider.nextSibling) {
+          targetList.insertBefore(card, todayDivider.nextSibling);
+        } else if (todayDivider) {
+          targetList.appendChild(card);
+        } else {
+          targetList.prepend(card);
+        }
+        syncTimelineDividers(targetList);
+      }
+    }
+    // Server save-url is still called by coreEntry.js. Server
+    // dedup handles the data side; this client path handles only
+    // the visual reorder.
+    return;
+  }
+
   // Build a temporary item object matching the real item structure
   const tempItem = {
     id:          tempId,
@@ -1351,6 +1447,10 @@ function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreens
     title,
     imgUrl,
     imgUrlMethod: imgUrlMethod || '',
+    // Phase 18b: stored for client-side dedup pre-check.
+    // Match against same fields on incoming addOptimisticCard calls.
+    category: normalizeCategoryForDedup(category),
+    confirmedType: confirmedType || '',
     cardContainer: container,
   });
 
