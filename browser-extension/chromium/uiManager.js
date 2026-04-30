@@ -118,15 +118,9 @@ function buildOverlayStyleElement() {
 /* shutter-error: no override — falls through to .kickclip-default */
 
 /* ── StatusBadge colors ── */
-#kickclip-status-badge-page,
 #kickclip-status-badge-core {
   background: ${BRAND.KEY_COLOR_HEX};
 }
-#kickclip-status-badge-page.shutter-success,
-#kickclip-status-badge-core.shutter-success {
-  background: rgb(34, 197, 94);
-}
-#kickclip-status-badge-page.shutter-error,
 #kickclip-status-badge-core.shutter-error {
   background: rgb(239, 68, 68);
 }
@@ -266,10 +260,6 @@ function ensureCoreBadge() {
   return el;
 }
 
-// Backward-compatible no-op exports kept because coreEngine re-exports them.
-export function showPageStatusBadge(_badgeState = 'default') {}
-export function showPageStatusBadgeText(_text) {}
-
 /**
  * Register the status_badge texts used for non-success states.
  * Called by coreEntry at init (and on shortcut change) so the badge's
@@ -319,8 +309,6 @@ export function showCoreStatusBadge(badgeState = 'default') {
     el.style.opacity = '1';
   } catch (e) {}
 }
-
-export function hidePageStatusBadge() {}
 
 export function hideCoreStatusBadge() {
   try {

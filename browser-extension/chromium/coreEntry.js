@@ -251,8 +251,8 @@ function ensureFullpageToastEl() {
   toast.id = 'kickclip-fullpage-entry-toast'; // KEPT for KC_CAPTURE_HIDE_IDS
   toast.style.cssText = [
     'position: fixed',
-    'top: 24px',
-    'right: 24px',
+    'top: 12px',
+    'right: 12px',
     'background: rgba(188, 19, 254, 0.92)',
     'color: white',
     'padding: 10px 16px',
@@ -1785,13 +1785,8 @@ async function saveActiveCoreItem(request = {}) {
 
     // No CoreItem active → save current page via OpenGraph metadata
     if (!activeItem || !activeUrl) {
-      // Step 1: hide StatusBadge for screenshot
-      const pageBadgeEl = getKCShadowElement('kickclip-status-badge-page');
-      if (pageBadgeEl)   { pageBadgeEl.style.transition = '';   pageBadgeEl.style.opacity = '0'; }
-
       const { url, title } = extractPageOpenGraphMeta();
       if (!url) {
-        if (pageBadgeEl)   { pageBadgeEl.style.transition = '';   pageBadgeEl.style.opacity = ''; }
         return { success: false, reason: 'missing-url' };
       }
 
@@ -1814,13 +1809,12 @@ async function saveActiveCoreItem(request = {}) {
         }
       }
 
-      // Capture is done. Restore the status badge right now,
+      // Capture is done. Continue immediately with follow-up async work,
       // BEFORE any other async work (userId, fetch-metadata, optimistic card,
       // shutter effect, toast). This keeps the perceived "screen blank" window
       // to just the capture itself, and ensures triggerShutterEffect below is
       // visible as soon as capture returns. Stage 2 post-processing
       // (screenshotProcessPromise) continues independently.
-      if (pageBadgeEl)   { pageBadgeEl.style.transition = '';   pageBadgeEl.style.opacity = ''; }
 
       // Stage 2: post-process the raw screenshot (bg color + crop) in parallel
       // with other async work (userId, fetch-metadata, etc.). Await result at
@@ -3048,7 +3042,6 @@ function mountKcAuthWatcher() {
       try {
         const ids = [
           'kickclip-highlight-overlay',
-          'kickclip-status-badge-page',
           'kickclip-status-badge-core',
         ];
         for (const id of ids) {
