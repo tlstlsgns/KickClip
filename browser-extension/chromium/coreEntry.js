@@ -252,8 +252,7 @@ function ensureFullpageToastEl() {
   toast.style.cssText = [
     'position: fixed',
     'top: 24px',
-    'left: 50%',
-    'transform: translateX(-50%)',
+    'right: 24px',
     'background: rgba(188, 19, 254, 0.92)',
     'color: white',
     'padding: 10px 16px',
