@@ -441,20 +441,74 @@ function mountShortcutRecorder() {
 const CATEGORY_ORDER = ['Img', 'SNS', 'Mail', 'Pages'];
 
 let _activeTab = 'Img';
+let _isCategoryTransitioning = false;
+let _categoryTransitionTimer = null;
+let _clearBarExitConfirmPending = null;
+
+const TAB_TRANSITION_MS = 300; // matches CSS transition duration
+
+function dismissClearConfirmPendingIfActive() {
+  if (_clearBarExitConfirmPending) {
+    _clearBarExitConfirmPending();
+  }
+}
+
+/**
+ * Single source of truth for switching the active category tab.
+ * Handles:
+ *  - early return on same-tab no-op
+ *  - confirm-pending dismiss on the clear bar (if active)
+ *  - tab button active-class toggle
+ *  - carousel transform
+ *  - transition flag set/clear (drives clear button disabled state)
+ *  - clear button disabled-state recompute
+ *
+ * Callers: setupTabHandlers (user click), addOptimisticCard (auto
+ * switch when an optimistic card lands in a non-active category),
+ * and any future automated tab switch.
+ */
+function setActiveTab(newTab) {
+  if (newTab === _activeTab) return;
+
+  // Dismiss confirm-pending on the clear bar before changing tabs.
+  // The user has effectively cancelled the intent by moving away.
+  dismissClearConfirmPendingIfActive();
+
+  _activeTab = newTab;
+
+  // Tab button active class
+  document.querySelectorAll('.sp-tab').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === newTab);
+  });
+
+  // Carousel transform
+  const wrap = document.getElementById('sp-itemlist-wrap');
+  if (wrap) {
+    const tabIndex = CATEGORY_ORDER.indexOf(newTab);
+    wrap.style.transform = tabIndex > 0
+      ? `translateX(-${tabIndex * 25}%)`
+      : 'translateX(0%)';
+  }
+
+  // Transition flag: button disabled during slide
+  _isCategoryTransitioning = true;
+  if (_categoryTransitionTimer) clearTimeout(_categoryTransitionTimer);
+  _categoryTransitionTimer = setTimeout(() => {
+    _isCategoryTransitioning = false;
+    _categoryTransitionTimer = null;
+    updateClearButtonState();
+  }, TAB_TRANSITION_MS);
+
+  // Recompute disabled state immediately for the new active tab.
+  // Button stays disabled during transition (via the flag); after
+  // transition, recompute reflects the new tab's actual state.
+  updateClearButtonState();
+}
 
 function setupTabHandlers() {
   document.querySelectorAll('.sp-tab').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const tab = btn.dataset.tab;
-      if (tab === _activeTab) return;
-      _activeTab = tab;
-      document.querySelectorAll('.sp-tab').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      const wrap = document.getElementById('sp-itemlist-wrap');
-      if (wrap) {
-        const tabIndex = ['Img', 'SNS', 'Mail', 'Pages'].indexOf(tab);
-        wrap.style.transform = tabIndex > 0 ? `translateX(-${tabIndex * 25}%)` : 'translateX(0%)';
-      }
+      setActiveTab(btn.dataset.tab);
     });
   });
 }
@@ -1270,23 +1324,7 @@ function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreens
   // switch to that tab first so the user sees the Optimistic Card appear.
   const targetTabKey = resolveItemListKey(tempItem);
   if (targetTabKey !== _activeTab) {
-    _activeTab = targetTabKey;
-    // Update tab button active states
-    document.querySelectorAll('.sp-tab').forEach((btn) => {
-      if (btn.dataset.tab === targetTabKey) {
-        btn.classList.add('active');
-      } else {
-        btn.classList.remove('active');
-      }
-    });
-    // Slide the wrap to the target tab
-    const tabIndex = CATEGORY_ORDER.indexOf(targetTabKey);
-    const wrap = document.getElementById('sp-itemlist-wrap');
-    if (wrap) {
-      wrap.style.transform = tabIndex > 0
-        ? `translateX(-${tabIndex * 25}%)`
-        : 'translateX(0%)';
-    }
+    setActiveTab(targetTabKey);
   }
 
   // Prepend to the top of the routed list box
@@ -1320,7 +1358,7 @@ function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreens
 
   // Attach handlers
   attachCardClickHandlers();
-  updateClearButtonState(resolveItemListKey(tempItem));
+  updateClearButtonState();
 }
 
 function removeOptimisticCard(tempId) {
@@ -1335,6 +1373,7 @@ function removeOptimisticCard(tempId) {
   // Clean up tracking
   optimisticCards.delete(tempId);
   displayedItemIds.delete(tempId);
+  updateClearButtonState();
 }
 
 /**
@@ -1405,30 +1444,28 @@ function applyOptimisticCardImage(tempId, imgUrl) {
 }
 
 /**
- * Recompute the disabled state of the clear button for a given
- * category. The button is disabled when:
- *  - The category list has zero .card-container elements, OR
- *  - The category list has any OptimisticCard
- *    (.card-container[data-optimistic-card]), OR
- *  - The button is mid-action (data-clear-pending="true").
+ * Recompute the disabled state of the single clear button. The
+ * button reflects the currently-active category. Called whenever
+ * card state changes, after tab transitions, and after bulk clear.
  */
-function updateClearButtonState(categoryKey) {
-  const list = document.querySelector(
-    `.sp-category-list[data-category-list="${categoryKey}"]`
-  );
-  if (!list) return;
-  const btn = list.querySelector('.sp-clear-btn');
+function updateClearButtonState() {
+  const btn = document.querySelector('.sp-clear-btn');
   if (!btn) return;
+
+  const list = document.querySelector(
+    `.sp-category-list[data-category-list="${_activeTab}"]`
+  );
+  if (!list) {
+    btn.disabled = true;
+    return;
+  }
 
   const hasCards = list.querySelector('.card-container') !== null;
   const hasOptimistic = list.querySelector('.card-container[data-optimistic-card]') !== null;
   const isPending = btn.dataset.clearPending === 'true';
+  const isTransitioning = _isCategoryTransitioning;
 
-  btn.disabled = !hasCards || hasOptimistic || isPending;
-}
-
-function updateAllClearButtonStates() {
-  CATEGORY_ORDER.forEach((cat) => updateClearButtonState(cat));
+  btn.disabled = !hasCards || hasOptimistic || isPending || isTransitioning;
 }
 
 async function executeClear(categoryKey, list, btn, exitConfirmPending) {
@@ -1440,7 +1477,7 @@ async function executeClear(categoryKey, list, btn, exitConfirmPending) {
   // Mark pending so the disabled-state recomputation keeps the button
   // disabled during the in-flight requests.
   btn.dataset.clearPending = 'true';
-  updateClearButtonState(categoryKey);
+  updateClearButtonState();
 
   const cardContainers = Array.from(list.querySelectorAll('.card-container'));
   const docIds = cardContainers
@@ -1496,82 +1533,79 @@ async function executeClear(categoryKey, list, btn, exitConfirmPending) {
   // Reset confirm-pending and pending flag.
   delete btn.dataset.clearPending;
   exitConfirmPending();
-  updateClearButtonState(categoryKey);
+  updateClearButtonState();
 
   // Toast.
   showKcToast(`${docIds.length} clips cleared`, 'success');
 }
 
 function attachClearButtonHandlers() {
-  CATEGORY_ORDER.forEach((cat) => {
+  const bar = document.querySelector('.sp-clear-bar');
+  const btn = bar?.querySelector('.sp-clear-btn');
+  if (!bar || !btn) return;
+
+  // Avoid double-attachment.
+  if (btn.dataset.handlerAttached === 'true') return;
+  btn.dataset.handlerAttached = 'true';
+
+  const trashIcon = btn.querySelector('.sp-clear-icon-trash');
+  const checkIcon = btn.querySelector('.sp-clear-icon-check');
+  const confirmText = bar.querySelector('.sp-clear-confirm-text');
+
+  let dismissHandler = null;
+
+  const exitConfirmPending = () => {
+    bar.classList.remove('confirm-pending');
+    if (trashIcon) trashIcon.style.display = '';
+    if (checkIcon) checkIcon.style.display = 'none';
+    if (confirmText) {
+      confirmText.style.display = 'none';
+      confirmText.textContent = '';
+    }
+    if (dismissHandler) {
+      document.removeEventListener('click', dismissHandler, true);
+      dismissHandler = null;
+    }
+  };
+
+  // Expose for setActiveTab to call.
+  _clearBarExitConfirmPending = exitConfirmPending;
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (btn.disabled) return;
+
     const list = document.querySelector(
-      `.sp-category-list[data-category-list="${cat}"]`
+      `.sp-category-list[data-category-list="${_activeTab}"]`
     );
     if (!list) return;
-    const bar = list.querySelector('.sp-clear-bar');
-    const btn = bar?.querySelector('.sp-clear-btn');
-    if (!bar || !btn) return;
 
-    // Avoid double-attachment.
-    if (btn.dataset.handlerAttached === 'true') return;
-    btn.dataset.handlerAttached = 'true';
+    if (!bar.classList.contains('confirm-pending')) {
+      const cardCount = list.querySelectorAll('.card-container').length;
+      if (cardCount === 0) return;
 
-    const trashIcon = btn.querySelector('.sp-clear-icon-trash');
-    const checkIcon = btn.querySelector('.sp-clear-icon-check');
-    const confirmText = bar.querySelector('.sp-clear-confirm-text');
-
-    let dismissHandler = null;
-
-    const exitConfirmPending = () => {
-      bar.classList.remove('confirm-pending');
-      if (trashIcon) trashIcon.style.display = '';
-      if (checkIcon) checkIcon.style.display = 'none';
+      bar.classList.add('confirm-pending');
+      if (trashIcon) trashIcon.style.display = 'none';
+      if (checkIcon) checkIcon.style.display = '';
       if (confirmText) {
-        confirmText.style.display = 'none';
-        confirmText.textContent = '';
+        confirmText.textContent = `Really delete ${cardCount} clips?`;
+        confirmText.style.display = '';
       }
-      if (dismissHandler) {
-        document.removeEventListener('click', dismissHandler, true);
-        dismissHandler = null;
-      }
-    };
 
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (btn.disabled) return;
-
-      if (!bar.classList.contains('confirm-pending')) {
-        // First click: enter confirm-pending.
-        const cardCount = list.querySelectorAll('.card-container').length;
-        if (cardCount === 0) return;
-
-        bar.classList.add('confirm-pending');
-        if (trashIcon) trashIcon.style.display = 'none';
-        if (checkIcon) checkIcon.style.display = '';
-        if (confirmText) {
-          confirmText.textContent = `Really delete ${cardCount} clips?`;
-          confirmText.style.display = '';
+      dismissHandler = (dismissEvent) => {
+        if (dismissEvent.target.closest('.sp-clear-btn') === btn) return;
+        exitConfirmPending();
+      };
+      setTimeout(() => {
+        if (dismissHandler) {
+          document.addEventListener('click', dismissHandler, true);
         }
+      }, 0);
+      return;
+    }
 
-        // Document-level dismiss listener (capture phase).
-        dismissHandler = (dismissEvent) => {
-          // Click on this same button — let it through to execute.
-          if (dismissEvent.target.closest('.sp-clear-btn') === btn) return;
-          exitConfirmPending();
-        };
-        // Attach on next microtask so the current click event doesn't
-        // immediately dismiss.
-        setTimeout(() => {
-          if (dismissHandler) {
-            document.addEventListener('click', dismissHandler, true);
-          }
-        }, 0);
-        return;
-      }
-
-      // Second click: execute the bulk delete.
-      executeClear(cat, list, btn, exitConfirmPending);
-    });
+    // Second click: execute clear on the active category's list.
+    executeClear(_activeTab, list, btn, exitConfirmPending);
   });
 }
 
@@ -2196,7 +2230,7 @@ function attachDeleteHandlers(container) {
               { method: 'DELETE' }
             ).catch((err) => console.error('[Delete]', err));
             cardContainer.remove();
-            updateAllClearButtonStates();
+            updateClearButtonState();
           }, 250);
         }
       }
@@ -2826,7 +2860,6 @@ function loadData() {
       if (
         child.dataset?.preserveAnimation
         || child.dataset?.optimisticCard
-        || child.dataset?.preserveClearBar === 'true'
       ) return;
       const dockCard = child.querySelector?.('.data-card');
       const cid = dockCard?.dataset?.itemId;
@@ -3003,7 +3036,7 @@ function loadData() {
     }
   });
 
-  updateAllClearButtonStates();
+  updateClearButtonState();
 
   // ── Attach handlers ──────────────────────────────────────────────────────
   attachCardClickHandlers();
@@ -3112,7 +3145,7 @@ function reconcileSnapshotSilently(snap) {
     optimisticCards.delete(matchedTempId);
     displayedItemIds.delete(matchedTempId);
     displayedItemIds.add(realItemId);
-    updateClearButtonState(resolveItemListKey(item));
+    updateClearButtonState();
 
     // NOTE: deliberately no appendChild, no updateCardImage. The
     // visible <img> keeps its base64 src; the dataset.imgUrl is the
