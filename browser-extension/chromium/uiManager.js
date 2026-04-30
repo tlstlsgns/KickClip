@@ -109,8 +109,19 @@ function buildOverlayStyleElement() {
   const style = document.createElement('style');
   style.id = 'kickclip-overlay-styles';
   style.textContent = `
+#kickclip-highlight-overlay {
+  transition: box-shadow 0.15s ease, opacity 0.15s ease,
+              top 0.05s ease, left 0.05s ease,
+              width 0.05s ease, height 0.05s ease;
+}
 #kickclip-highlight-overlay.kickclip-default {
   box-shadow: 0 2px 8px rgba(188, 19, 254, 0.25);
+}
+#kickclip-highlight-overlay.kickclip-default.kickclip-size-medium {
+  box-shadow: 0 4px 16px rgba(188, 19, 254, 0.30);
+}
+#kickclip-highlight-overlay.kickclip-default.kickclip-size-large {
+  box-shadow: 0 6px 24px rgba(188, 19, 254, 0.35);
 }
 #kickclip-highlight-overlay.kickclip-default.shutter-success {
   box-shadow: 0 0 0 2px rgba(188, 19, 254, 1);
@@ -544,6 +555,23 @@ export function showCoreHighlight(coreItem, isSaved = false, rectOverride = null
       // Handles adjacent CoreItem hover where hideCoreHighlight() is not called.
       const coreBadge = getKCShadowElement(CORE_BADGE_ID);
       overlay.classList.remove('shutter-success', 'shutter-error');
+      // Phase 17: classify element by size (sqrt(area) — equivalent
+      // square side length) and apply the matching size class. The
+      // CSS scales box-shadow blur/spread so larger elements get more
+      // visually prominent hover feedback.
+      const sizeMetric = Math.sqrt(r.width * r.height);
+      overlay.classList.remove(
+        'kickclip-size-small',
+        'kickclip-size-medium',
+        'kickclip-size-large'
+      );
+      if (sizeMetric < 400) {
+        overlay.classList.add('kickclip-size-small');
+      } else if (sizeMetric < 700) {
+        overlay.classList.add('kickclip-size-medium');
+      } else {
+        overlay.classList.add('kickclip-size-large');
+      }
       if (coreBadge) {
         coreBadge.style.transition = 'none';
         coreBadge.classList.remove('shutter-success', 'shutter-error');
