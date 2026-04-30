@@ -1363,19 +1363,24 @@ function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreens
     }
     const targetList = getCategoryList(targetTabKey);
     if (targetList) {
-      const card = targetList.querySelector(
+      const dataCard = targetList.querySelector(
         `[data-doc-id="${matchingItem.id}"]`
       );
-      if (card) {
+      // Phase 18b.1: data-doc-id lives on the inner data-card element,
+      // but the actual list child is the wrapping .card-container
+      // (which carries layout, animation, and image-container CSS).
+      // Reorder the wrapper, not the inner card.
+      const cardContainer = dataCard?.closest('.card-container');
+      if (cardContainer && cardContainer.parentElement === targetList) {
         const todayDivider = targetList.querySelector(
           '.sp-timeline-divider[data-timeline-label="Today"]'
         );
         if (todayDivider && todayDivider.nextSibling) {
-          targetList.insertBefore(card, todayDivider.nextSibling);
+          targetList.insertBefore(cardContainer, todayDivider.nextSibling);
         } else if (todayDivider) {
-          targetList.appendChild(card);
+          targetList.appendChild(cardContainer);
         } else {
-          targetList.prepend(card);
+          targetList.prepend(cardContainer);
         }
         syncTimelineDividers(targetList);
       }
