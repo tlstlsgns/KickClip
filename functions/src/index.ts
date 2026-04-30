@@ -288,6 +288,7 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     return;
   }
 
+  const resolvedUrl = url ? String(url).trim() : "";
   const resolvedImgUrl = img_url ? String(img_url).trim() : "";
   const clientCategoryRaw = typeof category === "string" ? category.trim() : "";
   const isPageCategory = clientCategoryRaw === "Page";
@@ -321,17 +322,50 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     return;
   }
 
+  // Dedup criteria: which categories match on url+img_url vs url-only.
+  // Phase 18a: server is the authority for deduplication. Client-side
+  // checks (Phase 18b) are a UX optimization layered on top.
+  const dedupRequiresImgUrl =
+    clientCategoryRaw === "Img" ||
+    (clientCategoryRaw === "SNS" && clientConfirmedTypeRaw === "contents");
+
   try {
     const db = getFirestore();
     const itemsRef = db.collection(`users/${userId}/items`);
-    const domain = (url && String(url).trim().length > 0) ?
-      extractSource(String(url)) : (resolvedImgUrl ? "local" : "unknown");
+
+    // Step 1: search for an existing doc matching the dedup criteria.
+    // User max ~10 items; full collection fetch is cheap.
+    let dedupHitDocId: string | null = null;
+    try {
+      const allSnap = await itemsRef.get();
+      for (const doc of allSnap.docs) {
+        const data = doc.data();
+        const existingUrl = typeof data.url === "string" ? data.url.trim() : "";
+        if (existingUrl !== resolvedUrl) continue;
+        if (dedupRequiresImgUrl) {
+          const existingImgUrl = typeof data.img_url === "string" ? data.img_url.trim() : "";
+          if (existingImgUrl !== resolvedImgUrl) continue;
+        }
+        dedupHitDocId = doc.id;
+        break;
+      }
+    } catch (searchErr) {
+      // Search failure should not block the save. Fall through to
+      // new-doc path (degrades gracefully — worst case is a duplicate).
+      console.error("[save-url] dedup search failed:", searchErr);
+      dedupHitDocId = null;
+    }
+
+    const domain = resolvedUrl.length > 0 ?
+      extractSource(resolvedUrl) : (resolvedImgUrl ? "local" : "unknown");
     const itemType = type ?
       String(type).trim() :
       resolvedImgUrl ? "image" :
-        url && String(url).trim().length > 0 ? determineType(String(url)) :
+        resolvedUrl.length > 0 ? determineType(resolvedUrl) :
           "image";
 
+    // Recompute newOrder for both paths — the doc (new or existing)
+    // floats to the top of the user's list either way.
     let newOrder = 0;
     try {
       const minSnap = await itemsRef.orderBy("order", "asc").limit(1).get();
@@ -343,49 +377,71 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
       newOrder = 0;
     }
 
-    const firestoreEntry: Record<string, any> = {
-      url: url ? String(url).trim() : "",
+    // Build the field set used for both create and update.
+    // For dedup-update, createdAt and directoryId are intentionally
+    // excluded (preserved on the existing doc).
+    const baseFields: Record<string, any> = {
+      url: resolvedUrl,
       title: String(title).trim(),
       timestamp,
       domain,
       type: itemType,
-      directoryId: "undefined",
       order: newOrder,
       saved_by: saved_by || "browser-extension",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
-    if (resolvedImgUrl) firestoreEntry.img_url = resolvedImgUrl;
-    if (clientCategoryRaw) firestoreEntry.category = clientCategoryRaw;
-    if (clientPlatformRaw) firestoreEntry.platform = clientPlatformRaw;
-    if (clientConfirmedTypeRaw) firestoreEntry.confirmed_type = clientConfirmedTypeRaw;
-    if (clientSenderRaw) firestoreEntry.sender = clientSenderRaw;
-    if (clientPageDescriptionRaw) firestoreEntry.page_description = clientPageDescriptionRaw;
-    if (clientScreenshotPaddingRaw > 0) firestoreEntry.screenshot_padding = clientScreenshotPaddingRaw;
-    if (clientTempIdRaw) firestoreEntry.temp_id = clientTempIdRaw;
-    if (typeof clientIsExtractedImgRaw === "boolean") firestoreEntry.is_extracted_img = clientIsExtractedImgRaw;
+    if (resolvedImgUrl) baseFields.img_url = resolvedImgUrl;
+    if (clientCategoryRaw) baseFields.category = clientCategoryRaw;
+    if (clientPlatformRaw) baseFields.platform = clientPlatformRaw;
+    if (clientConfirmedTypeRaw) baseFields.confirmed_type = clientConfirmedTypeRaw;
+    if (clientSenderRaw) baseFields.sender = clientSenderRaw;
+    if (clientPageDescriptionRaw) baseFields.page_description = clientPageDescriptionRaw;
+    if (clientScreenshotPaddingRaw > 0) baseFields.screenshot_padding = clientScreenshotPaddingRaw;
+    if (clientTempIdRaw) baseFields.temp_id = clientTempIdRaw;
+    if (typeof clientIsExtractedImgRaw === "boolean") baseFields.is_extracted_img = clientIsExtractedImgRaw;
     if (clientOverlayRatioRaw !== undefined && Number.isFinite(clientOverlayRatioRaw)) {
-      firestoreEntry.overlay_ratio = clientOverlayRatioRaw;
+      baseFields.overlay_ratio = clientOverlayRatioRaw;
     }
-    if (clientIsPortraitRaw) firestoreEntry.is_portrait = true;
-    if (clientImgUrlMethodRaw) firestoreEntry.img_url_method = clientImgUrlMethodRaw;
+    if (clientIsPortraitRaw) baseFields.is_portrait = true;
+    if (clientImgUrlMethodRaw) baseFields.img_url_method = clientImgUrlMethodRaw;
 
-    const newDocRef = itemsRef.doc();
-    await newDocRef.set(firestoreEntry);
+    let docId: string;
+    let isUpdate: boolean;
 
-    // 스크린샷 Storage 업로드 (백그라운드)
+    if (dedupHitDocId) {
+      // Dedup hit: update existing doc. createdAt and directoryId
+      // are NOT in baseFields, so they stay as-is.
+      docId = dedupHitDocId;
+      isUpdate = true;
+      await itemsRef.doc(docId).update(baseFields);
+    } else {
+      // No dedup match: create new doc. Add createdAt and the
+      // default directoryId to the field set.
+      const newDocRef = itemsRef.doc();
+      docId = newDocRef.id;
+      isUpdate = false;
+      const newDocFields: Record<string, any> = {
+        ...baseFields,
+        directoryId: "undefined",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      await newDocRef.set(newDocFields);
+    }
+
+    // Screenshot Storage upload (background) — applies to both
+    // create and update paths. Writes to the resolved docId.
     if (
       screenshot_base64 && userId && !isPortraitExtracted &&
       (!resolvedImgUrl || isPageCategory || isSnsPageCategory)
     ) {
-      const newItemId = newDocRef.id;
-      const newDocPath = `users/${userId}/items/${newItemId}`;
+      const docPath = `users/${userId}/items/${docId}`;
       (async () => {
         try {
-          const uploadResult = await uploadScreenshotToStorage(screenshot_base64, userId, newItemId);
+          const uploadResult = await uploadScreenshotToStorage(screenshot_base64, userId, docId);
           if (uploadResult) {
             const screenshotBgColor = typeof screenshot_bg_color === "string" ?
               screenshot_bg_color.trim() : "";
-            await getFirestore().doc(newDocPath).update({
+            await getFirestore().doc(docPath).update({
               img_url: uploadResult.publicUrl,
               ...(screenshotBgColor ? {screenshot_bg_color: screenshotBgColor} : {}),
             });
@@ -394,10 +450,13 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
       })();
     }
 
-    res.status(201).json({
+    // Build response. For backward compatibility, include the same
+    // `entry` shape as before, plus the new top-level isUpdate flag.
+    res.status(isUpdate ? 200 : 201).json({
       success: true,
-      entry: {...firestoreEntry, id: newDocRef.id},
+      entry: {...baseFields, id: docId},
       savedTo: "firestore",
+      isUpdate,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
