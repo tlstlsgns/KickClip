@@ -1591,7 +1591,18 @@ export function extractImageFromCoreItem(coreItem) {
         const ratio = height > 0 ? width / height : Number.POSITIVE_INFINITY;
         const passSize = width >= minContentSize && height >= minContentSize;
         const passRatio = ratio >= 0.2 && ratio <= 5.0;
-        return passSize && passRatio;
+        if (!(passSize && passRatio)) return false;
+        // Viewport visibility: rect center must be inside the viewport.
+        // This excludes off-screen carousel slides (e.g., Instagram's
+        // hidden slides) so that only the user-visible image wins.
+        const vw = Math.max(0, Number(window?.innerWidth || 0));
+        const vh = Math.max(0, Number(window?.innerHeight || 0));
+        if (vw <= 0 || vh <= 0) return true;
+        const centerX = r.left + width / 2;
+        const centerY = r.top + height / 2;
+        const passViewport =
+          centerX >= 0 && centerX < vw && centerY >= 0 && centerY < vh;
+        return passViewport;
       } catch (e) {
         return false;
       }
