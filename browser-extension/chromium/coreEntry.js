@@ -2397,13 +2397,64 @@ function getDominantImageElement(rootElement) {
 
 /**
  * Fetch an image URL and convert it to a clipboard-compatible PNG Blob.
- * Used by SNS contents clipboard copy (Phase 19d). Tries direct fetch,
- * then background fetch (bypasses CORS via extension permissions),
- * then re-encodes to PNG via canvas (required by ClipboardItem).
+ * Used by SNS contents and Image clipboard copy (Phase 19d+). Tries KickClip
+ * image-proxy first (same-origin HTTPS, server-side upstream fetch), then
+ * direct content-script fetch, then background fetch-image, with PNG/canvas
+ * re-encode as needed for ClipboardItem.
  * Returns null if all paths fail.
  */
 async function imageUrlToPngBlob(imageUrl) {
   if (!imageUrl) return null;
+
+  // Skip proxy for special URLs that the server cannot fetch
+  // (data: URLs are inline, chrome-extension:// is browser-internal).
+  // For other URLs (http://, https://), route through the KickClip
+  // image-proxy to avoid:
+  //   - mixed content (HTTP image on HTTPS page)
+  //   - CORS (image host without Access-Control-Allow-Origin)
+  //   - CORP / CSP restrictions in the extension context
+  // The server-side proxy fetches with extension-equivalent permissions
+  // and streams bytes back as same-origin to the page.
+  const skipProxy = (
+    imageUrl.startsWith('data:') ||
+    imageUrl.startsWith('chrome-extension://')
+  );
+  if (!skipProxy && typeof KC_SERVER_URL === 'string' && KC_SERVER_URL) {
+    try {
+      const proxyFetchUrl = `${KC_SERVER_URL}/api/v1/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+      const proxyRes = await fetch(proxyFetchUrl, { mode: 'cors' });
+      if (proxyRes.ok) {
+        const proxyBlob = await proxyRes.blob();
+        if (proxyBlob.type === 'image/png') {
+          return proxyBlob;
+        }
+        // Non-PNG — re-encode via canvas
+        try {
+          const objectUrl = URL.createObjectURL(proxyBlob);
+          const img = new Image();
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = () => reject(new Error('Image decode failed'));
+            img.src = objectUrl;
+          });
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.width || 0;
+          canvas.height = img.naturalHeight || img.height || 0;
+          URL.revokeObjectURL(objectUrl);
+          if (canvas.width > 0 && canvas.height > 0) {
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0);
+              const pngBlob = await new Promise((resolve) => {
+                canvas.toBlob((b) => resolve(b || null), 'image/png');
+              });
+              if (pngBlob) return pngBlob;
+            }
+          }
+        } catch (_) { /* fall through to other attempts */ }
+      }
+    } catch (_) { /* proxy fetch failed — fall through to other attempts */ }
+  }
 
   // Attempt 1: direct content-script fetch
   try {
