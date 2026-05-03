@@ -1675,6 +1675,60 @@ export function extractImageFromCoreItem(coreItem) {
       }
     }
 
+    // Naver image search: extract original-resolution URL from
+    // the pstatic CDN proxy <img> (?src=ENCODED_URL&type=a340 pattern).
+    // Without this, the saved img_url is the proxy URL (340px
+    // variant), not the original.
+    //
+    // Detection: host is search.naver.com AND pathname is
+    // /search.naver AND where=image query parameter is set
+    // (image search page only, not blog/news/cafe tabs).
+    const isNaverImageSearch = (
+      /(?:^|\.)search\.naver\.com$/.test(
+        String(window?.location?.hostname || '').toLowerCase()
+      ) &&
+      String(window?.location?.pathname || '') === '/search.naver' &&
+      new URLSearchParams(
+        String(window?.location?.search || '')
+      ).get('where') === 'image'
+    );
+    if (isNaverImageSearch) {
+      const naverImg = coreItem.querySelector?.(
+        'img[src*="search.pstatic.net"]'
+      );
+      if (naverImg) {
+        try {
+          const proxySrc = String(
+            naverImg.getAttribute?.('src') || naverImg.src || ''
+          ).trim();
+          if (proxySrc) {
+            const proxyUrl = new URL(proxySrc);
+            const originalUrl = proxyUrl.searchParams.get('src');
+            const w = parseInt(
+              naverImg.getAttribute?.('data-thumb-width'),
+              10
+            ) || 0;
+            const h = parseInt(
+              naverImg.getAttribute?.('data-thumb-height'),
+              10
+            ) || 0;
+            if (originalUrl && /^https?:\/\//i.test(originalUrl)) {
+              return {
+                image: {
+                  url: originalUrl,
+                  width: w,
+                  height: h,
+                },
+                usedCustomLogic: true,
+              };
+            }
+          }
+        } catch (e) {
+          // URL parsing failed — fall through to generic logic
+        }
+      }
+    }
+
     const rootFontSize = getRootFontSizePx();
     const viewportBasedSize = Math.max(0, Number(window?.innerWidth || 0) * 0.03);
     const minContentSize = Math.max(rootFontSize * 2, 32, viewportBasedSize);
