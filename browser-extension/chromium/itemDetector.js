@@ -605,12 +605,32 @@ function isVisuallySignificantImageRectForImageGate(r) {
     const ratio = height > 0 ? width / height : Number.POSITIVE_INFINITY;
     const passSize = width >= minContentSize && height >= minContentSize;
     const passRatio = ratio >= 0.2 && ratio <= 5.0;
-    // Phase 19j.1: viewport-center check removed. ItemMap detection
-    // must be scroll-position-invariant — a card's evidenceType
-    // should not change as the user scrolls. Size + aspect-ratio
-    // gate alone is sufficient; Phase 19j's dominance gate
-    // (isImageDominantInCoreItem) is the second filter elsewhere.
-    return passSize && passRatio;
+    if (!(passSize && passRatio)) return false;
+    // Phase 19j.2: rect-intersection viewport check (any portion of
+    // image rect visible in viewport). Replaces Phase 19j.1's removal
+    // and Phase 19j's center-point check.
+    //
+    // Why intersection, not center-point: a card's image may scroll
+    // partially above the viewport's top edge. The center point can
+    // cross the boundary while the bottom of the image is still
+    // visible, causing the card's evidenceType to flip from D to A
+    // mid-scroll. With intersection, the card stays classified as D
+    // until the entire image is off-screen.
+    //
+    // Why intersection, not none: lazy-loaded images that are far
+    // off-screen may have stale or zero rects, producing unreliable
+    // size measurements. Excluding them prevents fragmenting sibling
+    // groups when images load at different times.
+    const vw = Math.max(0, Number(window?.innerWidth || 0));
+    const vh = Math.max(0, Number(window?.innerHeight || 0));
+    if (vw <= 0 || vh <= 0) return true;
+    const passViewport = (
+      Number(r.right)  > 0  &&
+      Number(r.left)   < vw &&
+      Number(r.bottom) > 0  &&
+      Number(r.top)    < vh
+    );
+    return passViewport;
   } catch (e) {
     return false;
   }
