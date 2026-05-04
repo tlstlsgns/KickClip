@@ -18,7 +18,7 @@ let _coreBadgeFailedText = '';
 // ── Debug flag ────────────────────────────────────────────────────────────
 // Set to true to show ItemMap candidate outlines (green/red/blue) for debugging.
 // Set to false to disable all debug outlines in production.
-const ITEMMAP_DEBUG_OUTLINES = false;
+const ITEMMAP_DEBUG_OUTLINES = true;
 
 let _activeCoreHighlightItem = null; // tracks which coreItem is currently highlighted
 
@@ -199,6 +199,7 @@ const GREEN_LAYER_ID = 'kickclip-green-candidate-layer';
 const METADATA_TOOLTIP_ID = 'kickclip-metadata-tooltip';
 const EVIDENCE_TYPE_INTERACTION = 'B';
 const EVIDENCE_TYPE_C = 'C';
+const EVIDENCE_TYPE_IMAGE_ANCHOR = 'D';
 
 let greenOutlinedElements = new Set();
 
@@ -650,8 +651,9 @@ export function renderItemMapCandidates(candidates) {
     if (!el) continue;
     try {
       const color =
-        item?.evidenceType === EVIDENCE_TYPE_C           ? '#1a73e8' :
-        item?.evidenceType === EVIDENCE_TYPE_INTERACTION ? 'red'     :
+        item?.evidenceType === EVIDENCE_TYPE_C             ? '#1a73e8' :
+        item?.evidenceType === EVIDENCE_TYPE_INTERACTION   ? 'red'     :
+        item?.evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR ? '#FFA500' :
         'green';
       el.style.setProperty('outline', `2px solid ${color}`, 'important');
       el.style.setProperty('outline-offset', '-2px', 'important');

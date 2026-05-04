@@ -19,7 +19,11 @@ export {
   calculateSimilarity,
   getItemMapEntryByElement,
   EVIDENCE_TYPE_C,
+  EVIDENCE_TYPE_ANCHOR,
+  EVIDENCE_TYPE_IMAGE_ANCHOR,
 } from './itemDetector.js';
+
+// ItemMap debug overlay: Type D uses outline #FFA500 (see uiManager renderItemMapCandidates).
 
 // Metadata extraction logic
 export {

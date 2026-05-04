@@ -2,6 +2,8 @@ import { state } from './stateLite.js';
 import {
   detectItemMaps,
   EVIDENCE_TYPE_C,
+  EVIDENCE_TYPE_ANCHOR,
+  EVIDENCE_TYPE_IMAGE_ANCHOR,
   getItemMapFingerprint,
   findClusterContainerFromTarget,
   getItemMapEvidenceType,
@@ -1047,7 +1049,7 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     return false;
   }
   const evidenceType = getItemMapEvidenceType(coreItemContainer);
-  if (evidenceType === 'A') {
+  if (evidenceType === EVIDENCE_TYPE_ANCHOR || evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
     const anchor = target?.matches?.('a') ? target : target?.closest?.('a');
     const hasAnchor = !!anchor;
     const contained = hasAnchor && !!coreItemContainer.contains?.(anchor);
@@ -1213,7 +1215,7 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
       : '';
   let coreItem = coreItemContainer;
   let closestAtag = null;
-  if (evidenceType === 'A') {
+  if (evidenceType === EVIDENCE_TYPE_ANCHOR || evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
     const anchor = target?.matches?.('a') ? target : target?.closest?.('a');
     const anchorValid = anchor && (await isValidTypeAAnchor(anchor));
     const effectiveTarget = anchorValid ? target : await findPrimaryTypeAAnchor(coreItemContainer);
@@ -1373,7 +1375,7 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   if (evidenceType === 'B') {
     requestInstagramPostDataForTypeB(coreItem, state.lastExtractedMetadata, clientX, clientY);
   }
-  if (evidenceType === 'A') {
+  if (evidenceType === EVIDENCE_TYPE_ANCHOR || evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
     requestInstagramThumbnailForTypeA(coreItem, state.lastExtractedMetadata, clientX, clientY);
   }
   return true;

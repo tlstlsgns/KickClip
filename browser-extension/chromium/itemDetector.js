@@ -23,6 +23,7 @@ const STRUCTURE_IGNORED_TAGS = new Set(['svg', 'path', 'rect', 'circle', 'button
 const EVIDENCE_TYPE_ANCHOR = 'A';
 const EVIDENCE_TYPE_INTERACTION = 'B';
 const EVIDENCE_TYPE_C = 'C';
+const EVIDENCE_TYPE_IMAGE_ANCHOR = 'D';
 const TYPE_B_FULLSCREEN_COVERAGE_THRESHOLD = 0.9;
 const SHARE_KEYWORDS = ['share', '공유하기', '공유', 'send-as-message', 'send-privately', '보내기'];
 const TYPE_B_CROSS_TAG_EXCEPTIONS = new Set(['shreddit-ad-post']);
@@ -565,6 +566,83 @@ function getShareButtonRelativeDepth(el) {
   }
 }
 
+/** Mirrors dataExtractor getRootFontSizePx (not exported from that module). */
+function getRootFontSizePxForImageGate() {
+  try {
+    const root = document.documentElement;
+    const cs = root && window.getComputedStyle ? window.getComputedStyle(root) : null;
+    const px = parseFloat(String(cs?.fontSize || '16'));
+    return isFinite(px) && px > 0 ? px : 16;
+  } catch (e) {
+    return 16;
+  }
+}
+
+/** Mirrors extractMetadataForCoreItem getEffectiveImageRect for img nodes. */
+function getEffectiveImageRectForImageGate(img) {
+  const r = img.getBoundingClientRect ? img.getBoundingClientRect() : null;
+  if (r && (r.width < 10 || r.height < 10) && img.parentElement) {
+    const pr = img.parentElement.getBoundingClientRect
+      ? img.parentElement.getBoundingClientRect()
+      : null;
+    if (pr && pr.width >= 10 && pr.height >= 10) return pr;
+  }
+  return r;
+}
+
+/**
+ * Mirrors extractMetadataForCoreItem isVisuallySignificantImage(rect) (not exported).
+ * Used for Type D: any significant img within the card scope, not only inside the anchor.
+ */
+function isVisuallySignificantImageRectForImageGate(r) {
+  try {
+    if (!r) return false;
+    const rootFontSize = getRootFontSizePxForImageGate();
+    const viewportBasedSize = Math.max(0, Number(window?.innerWidth || 0) * 0.03);
+    const minContentSize = Math.max(rootFontSize * 2, 32, viewportBasedSize);
+    const width = Math.max(0, Number(r.width || 0));
+    const height = Math.max(0, Number(r.height || 0));
+    const ratio = height > 0 ? width / height : Number.POSITIVE_INFINITY;
+    const passSize = width >= minContentSize && height >= minContentSize;
+    const passRatio = ratio >= 0.2 && ratio <= 5.0;
+    if (!(passSize && passRatio)) return false;
+    const vw = Math.max(0, Number(window?.innerWidth || 0));
+    const vh = Math.max(0, Number(window?.innerHeight || 0));
+    if (vw <= 0 || vh <= 0) return true;
+    const centerX = r.left + width / 2;
+    const centerY = r.top + height / 2;
+    const passViewport =
+      centerX >= 0 && centerX < vw && centerY >= 0 && centerY < vh;
+    return passViewport;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * True if el contains at least one img[src] whose rect passes the same
+ * visual significance rules as dataExtractor's isVisuallySignificantImage.
+ */
+function hasVisuallySignificantImageInScope(el) {
+  try {
+    if (!el || el.nodeType !== 1 || !el.querySelectorAll) return false;
+    const imgs = el.matches?.('img[src]')
+      ? [el, ...Array.from(el.querySelectorAll('img[src]'))]
+      : Array.from(el.querySelectorAll('img[src]'));
+    const seen = new Set();
+    for (const img of imgs) {
+      if (!img || img.nodeType !== 1) continue;
+      if (seen.has(img)) continue;
+      seen.add(img);
+      const r = getEffectiveImageRectForImageGate(img);
+      if (isVisuallySignificantImageRectForImageGate(r)) return true;
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
 async function getEvidenceType(el) {
   try {
     if (!el || el.nodeType !== 1) return '';
@@ -573,7 +651,12 @@ async function getEvidenceType(el) {
     if (TYPE_B_PLATFORMS.has(getCurrentPlatform()) && hasShareButtonEvidence(el)) {
       return EVIDENCE_TYPE_INTERACTION;
     }
-    if (await hasValidAbsoluteAnchor(el)) return EVIDENCE_TYPE_ANCHOR;
+    // Type A vs D: same anchor gate; D adds image-rich card signal (B > D > A).
+    if (await hasValidAbsoluteAnchor(el)) {
+      return hasVisuallySignificantImageInScope(el)
+        ? EVIDENCE_TYPE_IMAGE_ANCHOR
+        : EVIDENCE_TYPE_ANCHOR;
+    }
     return '';
   } catch (e) {
     return '';
@@ -964,7 +1047,7 @@ async function isMeaningfulItemMap(elements, evidenceType = EVIDENCE_TYPE_ANCHOR
       hasSingleActiveItem
     );
   if (
-    evidenceType === EVIDENCE_TYPE_ANCHOR &&
+    (evidenceType === EVIDENCE_TYPE_ANCHOR || evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) &&
     highConfidenceMenuTab &&
     !hasStrongContentMajority &&
     avgVisual < 1 &&
@@ -982,7 +1065,7 @@ async function isMeaningfulItemMap(elements, evidenceType = EVIDENCE_TYPE_ANCHOR
   const richCount = elements.filter((el) => hasImageAndText(el) || hasMultipleTextBlocks(el) || getTextLen(el) > 20).length;
   if (richCount >= Math.ceil(elements.length * 0.4)) return true;
 
-  if (evidenceType === EVIDENCE_TYPE_ANCHOR) {
+  if (evidenceType === EVIDENCE_TYPE_ANCHOR || evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
     let hasValidTypeASignal = false;
     for (const el of elements) {
       if (await hasValidAbsoluteAnchor(el)) {
@@ -1302,7 +1385,10 @@ export async function detectItemMaps(root = document) {
           const nextIdentity = getElementSignature(cur);
           if (!nextIdentity) break;
           let identityMatch = isSimilarIdentity(identitySig, nextIdentity, 0.8);
-          if (!identityMatch.matched && evidenceType === EVIDENCE_TYPE_ANCHOR) {
+          if (
+            !identityMatch.matched &&
+            (evidenceType === EVIDENCE_TYPE_ANCHOR || evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR)
+          ) {
             const startHasNavState =
               hasAriaActiveState(start) || hasNavSemantics(start) || hasNavKeywords(start) || hasNavTestIdSignals(start);
             const curHasNavState =
@@ -1489,8 +1575,12 @@ export async function detectItemMaps(root = document) {
         return false;
       }
     };
-    const typeASeeds = deduped.filter((x) => x?.evidenceType === EVIDENCE_TYPE_ANCHOR && x?.element);
-    for (const seed of typeASeeds) {
+    const anchorLikeSeeds = deduped.filter(
+      (x) =>
+        (x?.evidenceType === EVIDENCE_TYPE_ANCHOR || x?.evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) &&
+        x?.element
+    );
+    for (const seed of anchorLikeSeeds) {
       const seedEl = seed.element;
       const parent = seedEl?.parentElement;
       if (!parent || !parent.children) continue;
@@ -1554,7 +1644,9 @@ export async function detectItemMaps(root = document) {
             itemMapSignature: `${seed.itemMapSignature || seed.signature || seed.key || ''}::R`,
             identitySignature: siblingIdentity || seed.identitySignature || '',
             structureSignature: getInternalStructure(sibling, 3) || seed.structureSignature || '',
-            evidenceType: EVIDENCE_TYPE_ANCHOR,
+            evidenceType: hasVisuallySignificantImageInScope(sibling)
+              ? EVIDENCE_TYPE_IMAGE_ANCHOR
+              : EVIDENCE_TYPE_ANCHOR,
             element: sibling,
             similarityType: rootInfo.viaSimpleWrapperBypass ? 'comprehensive-sibling-recovery-wrapper-bypass' : 'comprehensive-sibling-recovery',
             classPattern: seed.classPattern || '',
@@ -1603,7 +1695,10 @@ export async function detectItemMaps(root = document) {
       if (item.evidenceType === EVIDENCE_TYPE_INTERACTION) {
         return primaryBItems.some((p) => p.element === el);
       }
-      if (item.evidenceType === EVIDENCE_TYPE_ANCHOR) {
+      if (
+        item.evidenceType === EVIDENCE_TYPE_ANCHOR ||
+        item.evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR
+      ) {
         const insideAnyPrimaryB = primaryBItems.some((p) => p.element && p.element.contains(el));
         if (insideAnyPrimaryB) return false;
       }
@@ -1726,7 +1821,12 @@ export async function detectItemMaps(root = document) {
     const finalFiltered = merged.filter((item) => {
       if (!item?.element) return false;
       if (isLayoutHeaderFooterElement(item.element)) return false;
-      if (item.evidenceType !== EVIDENCE_TYPE_ANCHOR) return true;
+      if (
+        item.evidenceType !== EVIDENCE_TYPE_ANCHOR &&
+        item.evidenceType !== EVIDENCE_TYPE_IMAGE_ANCHOR
+      ) {
+        return true;
+      }
       return !allBContainers.some((bEl) => bEl && bEl.contains?.(item.element));
     });
 
@@ -1846,7 +1946,7 @@ export function ensureClusterCacheFromState() {
 export const findItemsOnPage = detectItemMaps;
 export const buildItemMap = detectItemMaps;
 export const findOptimalCluster = findClusterContainerFromTarget;
-export { EVIDENCE_TYPE_C };
+export { EVIDENCE_TYPE_C, EVIDENCE_TYPE_ANCHOR, EVIDENCE_TYPE_IMAGE_ANCHOR };
 
 export function calculateSimilarity(sigA, sigB) {
   if (!sigA || !sigB) return 0;
