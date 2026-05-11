@@ -18,7 +18,7 @@ let _coreBadgeFailedText = '';
 // ── Debug flag ────────────────────────────────────────────────────────────
 // Set to true to show ItemMap candidate outlines (green/red/blue) for debugging.
 // Set to false to disable all debug outlines in production.
-const ITEMMAP_DEBUG_OUTLINES = true;
+const ITEMMAP_DEBUG_OUTLINES = false;
 
 let _activeCoreHighlightItem = null; // tracks which coreItem is currently highlighted
 
