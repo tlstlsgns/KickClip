@@ -521,22 +521,16 @@ function normalizeItemCategoryAndType(item) {
   const rawCategory = (item?.category || '').trim();
   const rawType = (item?.confirmed_type || item?.confirmedType || '').trim();
 
-  // Legacy 'Contents' → Image (if Image confirmed_type) or Page (anything else, including Video)
-  if (rawCategory === 'Contents') {
-    if (rawType === 'Image') return { category: 'Image', confirmedType: '' };
-    return { category: 'Page', confirmedType: '' };
-  }
-
   // SNS: normalize confirmedType to 'contents' or 'post'
   if (rawCategory === 'SNS') {
     if (rawType === 'Image' || rawType === 'Video' || rawType === 'contents') {
       return { category: 'SNS', confirmedType: 'contents' };
     }
-    // 'Post', 'Page', 'post', empty, or anything else → 'post'
+    // 'Post', 'post', empty, or anything else → 'post'
     return { category: 'SNS', confirmedType: 'post' };
   }
 
-  // Image / Mail / Page / anything else — return as-is; confirmedType should be empty for these
+  // Image / anything else (legacy values) — return as-is; confirmedType should be empty for these
   return { category: rawCategory, confirmedType: rawType };
 }
 
@@ -548,7 +542,7 @@ function resolveItemListKey(item) {
   const { category } = normalizeItemCategoryAndType(item);
   if (category === 'Image') return 'Img';
   if (category === 'SNS')   return 'SNS';
-  // Page, legacy Mail, and anything else → Pages (default)
+  // Anything else (legacy / unrecognized categories) → Pages (default)
   return 'Pages';
 }
 
@@ -996,7 +990,6 @@ function createDataCard(item) {
   const escapedTitle = displayTitle.replace(/"/g, '&quot;');
   const imgUrl       = (item.img_url || '').trim();
   const escapedImgUrl = imgUrl.replace(/"/g, '&quot;');
-  const pageDescription = String(item.page_description || '');
   const directoryId  = item.directoryId && item.directoryId !== 'undefined' ? item.directoryId : '';
 
   // Upload button HTML (shared) — appears immediately left of delete in header
@@ -1102,7 +1095,6 @@ function createDataCard(item) {
         ${headerHtml}
         <div class="data-card-info">
           <div class="data-card-extracted-title">${escInfo(displayTitle)}</div>
-          <div class="data-card-extracted-description">${escInfo(pageDescription)}</div>
         </div>
       </div>
     </div>`;
@@ -1224,7 +1216,7 @@ function animateEntrance(container, wrapper) {
 }
 
 // ── Optimistic UI ─────────────────────────────────────────────────────────────
-function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreenshotFlag, category, platform, confirmedType, pageDescription, imgUrlMethod, createdAt }) {
+function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreenshotFlag, category, platform, confirmedType, imgUrlMethod, createdAt }) {
   if (!currentUser) return;
 
   // Deduplication: ignore if a temp card with same tempId already exists
@@ -1336,7 +1328,6 @@ function addOptimisticCard({ tempId, url, title, imgUrl, isScreenshot: isScreens
     category:        category      || '',
     platform:        platform      || '',
     confirmed_type:  confirmedType || '',
-    page_description: pageDescription || '',
     img_url_method:   imgUrlMethod || '',
     createdAt: typeof createdAt === 'number' ? createdAt : Date.now(),
   };
@@ -3321,7 +3312,6 @@ if (chrome?.runtime?.onMessage) {
         category:          message.category      || '',
         platform:          message.platform      || '',
         confirmedType:     message.confirmedType || '',
-        pageDescription:     message.page_description || '',
         imgUrlMethod:      message.img_url_method   || '',
         createdAt:         typeof message.createdAt === 'number' ? message.createdAt : Date.now(),
       });

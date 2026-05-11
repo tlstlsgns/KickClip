@@ -168,87 +168,6 @@ async function resolveRedirect(url) {
   }
 }
 
-/**
- * Fetch metadata (title and description) from a URL
- * Uses fetch API to avoid CORS issues (background worker has broader permissions)
- * 
- * @param {string} url - The URL to fetch metadata from
- * @returns {Promise<{title: string|null, description: string|null}>}
- */
-async function fetchMetadata(url) {
-  try {
-    // Create AbortController for timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout
-
-    // Fetch the HTML
-    const response = await fetch(url, {
-      method: 'GET',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    // Get HTML text
-    const html = await response.text();
-
-    // Parse title
-    let title = null;
-    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-    if (titleMatch && titleMatch[1]) {
-      title = titleMatch[1].trim();
-      // Decode HTML entities
-      title = title.replace(/&amp;/g, '&')
-                   .replace(/&lt;/g, '<')
-                   .replace(/&gt;/g, '>')
-                   .replace(/&quot;/g, '"')
-                   .replace(/&#39;/g, "'")
-                   .replace(/&nbsp;/g, ' ');
-    }
-
-    // Parse description from meta tags
-    let description = null;
-    
-    // Try og:description first
-    const ogDescMatch = html.match(/<meta\s+property=["']og:description["']\s+content=["']([^"']+)["']/i);
-    if (ogDescMatch && ogDescMatch[1]) {
-      description = ogDescMatch[1].trim();
-    } else {
-      // Fallback to standard description meta tag
-      const descMatch = html.match(/<meta\s+name=["']description["']\s+content=["']([^"']+)["']/i);
-      if (descMatch && descMatch[1]) {
-        description = descMatch[1].trim();
-      }
-    }
-
-    // Decode HTML entities in description
-    if (description) {
-      description = description.replace(/&amp;/g, '&')
-                               .replace(/&lt;/g, '<')
-                               .replace(/&gt;/g, '>')
-                               .replace(/&quot;/g, '"')
-                               .replace(/&#39;/g, "'")
-                               .replace(/&nbsp;/g, ' ');
-    }
-
-    return { title, description };
-  } catch (error) {
-    // Handle timeout, network errors, etc.
-    if (error.name === 'AbortError') {
-      return { title: null, description: null };
-    } else {
-      return { title: null, description: null };
-    }
-  }
-}
-
 const sendConnectionPing = async () => {};
 
 // Send ping when extension starts/loads or service worker wakes up
@@ -1198,34 +1117,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // Handle metadata fetching request
-  if (request.action === 'fetch-metadata') {
-    const url = request.url;
-    if (!url || typeof url !== 'string') {
-      sendResponse({ success: false, error: 'Invalid URL' });
-      return true;
-    }
-
-    // Fetch metadata asynchronously
-    fetchMetadata(url)
-      .then((metadata) => {
-        sendResponse({
-          success: true,
-          title: metadata.title,
-          description: metadata.description
-        });
-      })
-      .catch((error) => {
-        sendResponse({
-          success: false,
-          error: error.message || 'Failed to fetch metadata'
-        });
-      });
-
-    // Return true to indicate we will send a response asynchronously
-    return true;
-  }
-  
   // Fetch image via background script to bypass CORS restrictions.
   // Content-script fetch fails for cross-origin images without CORS headers.
   // Background fetch uses extension's <all_urls> permission to succeed.

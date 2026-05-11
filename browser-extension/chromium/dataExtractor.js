@@ -3462,52 +3462,6 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       return pageUrl ? _getCategoryBaseDomain(pageUrl) : '';
     }
 
-    // Returns true if pageUrl is a search engine domain but NOT a search results page.
-    // In this case dominant media check should be suppressed — items on search engine
-    // home/non-search pages (e.g. google.com main, naver.com main) are not real Contents.
-    function isSearchEngineNonSearchPage() {
-      if (!pageUrl) return false;
-      try {
-        const ph = new URL(pageUrl).hostname.toLowerCase();
-        const pp = new URL(pageUrl).pathname.toLowerCase();
-        const ps = new URL(pageUrl).search.toLowerCase();
-
-        // Google: search results → /search?q=...
-        if (ph.includes('google.com')) {
-          return !(pp.startsWith('/search') && ps.includes('q='));
-        }
-        // Naver: search results → search.naver.com/...
-        if (ph === 'search.naver.com') return false; // IS a search page
-        if (ph.includes('naver.com')) return true;   // naver.com but not search subdomain
-
-        // Bing: search results → /search?q=...
-        if (ph.includes('bing.com')) {
-          return !(pp.startsWith('/search') && ps.includes('q='));
-        }
-        // DuckDuckGo: search results → duckduckgo.com/?q=...
-        if (ph.includes('duckduckgo.com')) {
-          return !(ps.includes('q='));
-        }
-        // Yahoo Search: search results → search.yahoo.com/search?...
-        if (ph.includes('yahoo.com')) {
-          return !(ph.startsWith('search.') && pp.startsWith('/search'));
-        }
-        // Daum: search results → search.daum.net/search?...
-        if (ph.includes('daum.net')) {
-          return !(ph.startsWith('search.') && pp.startsWith('/search'));
-        }
-        // Baidu: search results → baidu.com/s?...
-        if (ph.includes('baidu.com')) {
-          return !(pp === '/s' || pp.startsWith('/s?') || ps.includes('wd='));
-        }
-        // Yandex: search results → yandex.com/search/...
-        if (ph.includes('yandex.com') || ph.includes('yandex.ru')) {
-          return !(pp.startsWith('/search'));
-        }
-      } catch (_) {}
-      return false;
-    }
-
     // ── Step 1: SNS ───────────────────────────────────────────────────────────
     // Detect SNS platform first (before any media check).
     // Then classify as `contents` (dominant media present) or `post` (no dominant media).
@@ -3542,35 +3496,17 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       };
     }
 
-    // ── Step 2.5: Unconditional Video hosts → Page ────────────────────────────
-    // YouTube videos/shorts, Vimeo, Twitch URLs are always Page category. This
-    // check runs BEFORE the dominant media check (Step 3) because these pages
-    // often contain a dominant <video> element or large thumbnail image, which
-    // would otherwise cause Step 3 to classify them as Image.
-    //
-    // Note: Video is no longer a distinct category in the new taxonomy — these
-    // URLs classify as plain Page (with img_url handling done separately for
-    // YouTube thumbnails by coreEntry.js).
-    if (
-      !!extractYouTubeShortcodeFromUrl(fullUrlString) ||
-      host.includes('vimeo.com') ||
-      host.includes('twitch.tv')
-    ) {
-      return { category: 'Page', platform: getSavedDomain(), confirmedType: '' };
-    }
-
     // ── Step 3: Dominant media check (non-SNS) ────────────────────────────────
     // Only DOMINANT IMAGE classifies as Image category.
-    // Dominant Video falls through to default (Page) — Video is no longer a distinct category.
-    // Skip check when pageUrl is a search engine non-search page (items are ads, not real content).
-    const dominantType = isSearchEngineNonSearchPage() ? '' : getDominantMediaType();
+    // Dominant Video falls through to the null-category default — Video is not a distinct category.
+    const dominantType = getDominantMediaType();
     if (dominantType === 'Image') {
       return { category: 'Image', platform: getPageDomain(), confirmedType: '' };
     }
 
     // ── Step 4: Same-origin URL-based ─────────────────────────────────────────
     // Only image file extensions classify as Image. Video extensions and video-host URLs
-    // fall through to default (Page).
+    // fall through to the null-category default.
     const savedDomain = getSavedDomain();
     const pageDomain  = pageUrl ? _getCategoryBaseDomain(pageUrl) : '';
     const sameOrigin  = !!savedDomain && !!pageDomain && savedDomain === pageDomain;
@@ -3584,7 +3520,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
     // ── Step 5: Weighted scoring ──────────────────────────────────────────────
     // Only scores toward IMAGE classification. Video signals are ignored.
     // A page reaches Image only when there is a clear, single image focus.
-    if (!isSearchEngineNonSearchPage()) {
+    {
       let score = 0;
       const mediaRatio = Number(htmlContext?.mediaRatio) || 0;
       if (mediaRatio > 0.7) score += 70;
@@ -3602,9 +3538,12 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       }
     }
 
-    // ── Step 6: Default ───────────────────────────────────────────────────────
-    return { category: 'Page', platform: getSavedDomain(), confirmedType: '' };
+    // ── Step 6: Default — no recognized category ─────────────────────────────
+    // KickClip now classifies only SNS and Image. Pages that match neither
+    // return a null category, and downstream flows treat that as "no clip
+    // target" (silent no-op gate is added in D3).
+    return { category: null, platform: getSavedDomain(), confirmedType: '' };
   } catch (e) {
-    return { category: 'Page', platform: '', confirmedType: '' };
+    return { category: null, platform: '', confirmedType: '' };
   }
 }

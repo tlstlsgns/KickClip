@@ -48,7 +48,6 @@ let _kcUserReady = false; // true when kickclipUserId is confirmed
 function isSignedIn() {
   return _kcUserReady === true;
 }
-let _pageMetaInitialized = false;
 // Cached keyboard shortcut display string, derived from
 // chrome.storage.local.kickclipShortcut (written by background.js
 // runShortcutPoll). Updated on init and via storage.onChanged so toast
@@ -119,21 +118,6 @@ function normalizeSavedUrlsResponse(entries) {
         : normalizeUrlForSavedCheck(e?.url || '')
     )
     .filter(Boolean);
-}
-
-function initPageLevelMetadata() {
-  try {
-    const pageUrl = String(window?.location?.href || '').trim();
-    if (!pageUrl) return;
-    const { category, platform, confirmedType } = detectItemCategory(pageUrl, pageUrl, null);
-    state.lastExtractedMetadata = {
-      ...(state.lastExtractedMetadata || {}),
-      activeHoverUrl: '',
-      category,
-      ...(platform      ? { platform }      : {}),
-      ...(confirmedType ? { confirmedType }  : {}),
-    };
-  } catch (e) {}
 }
 
 /**
@@ -558,7 +542,6 @@ function coreClear() {
     try { hideCoreHighlight(); } catch (e) {}
   } else {
     clearCoreSelection();
-    initPageLevelMetadata();
   }
   _lastMouseoverTarget = null;
 }
@@ -1253,6 +1236,25 @@ async function saveActiveCoreItem(request = {}) {
     const youtubeThumbnailUrl = youtubeShortcode ? getYouTubeThumbnailUrl(youtubeShortcode) : '';
     const isYouTubeSave = !!youtubeThumbnailUrl;
 
+    const title = String(meta?.title || document.title || url).trim();
+    const imgUrl = isYouTubeSave
+      ? youtubeThumbnailUrl
+      : String(request?.img_url || freshImage?.url || '').trim();
+
+    // === D3: image-less silent guard ===
+    // CoreItem is active but no image is resolvable at clip time:
+    //   - extractImageFromCoreItem() yielded nothing (cached or fresh),
+    //   - request.img_url (iframe-relay path) is empty,
+    //   - and the URL is not a YouTube watch/short URL (whose thumbnail
+    //     would always be present via youtubeThumbnailUrl).
+    // KickClip now clips only image-bearing CoreItems and SNS posts.
+    // Return silently — no clipboard, no shutter, no optimistic card,
+    // no server fetch — so the user sees nothing happen, mirroring the
+    // 'no-core-item' early-return shape above.
+    if (!imgUrl) {
+      return { success: false, reason: 'no-image' };
+    }
+
     // Step 1: hide CoreHighlight + StatusBadge for screenshot.
     // Skipped in relay mode — iframe owns the visible UI.
     const coreOverlayEl = !isIframeRelay
@@ -1264,15 +1266,9 @@ async function saveActiveCoreItem(request = {}) {
     if (coreOverlayEl) { coreOverlayEl.style.transition = ''; coreOverlayEl.style.opacity = '0'; }
     if (coreBadgeEl)   { coreBadgeEl.style.transition = '';   coreBadgeEl.style.opacity = '0'; }
 
-    const title = String(meta?.title || document.title || url).trim();
-    const imgUrl = isYouTubeSave
-      ? youtubeThumbnailUrl
-      : String(request?.img_url || freshImage?.url || '').trim();
     // Reflects whether extractImageFromCoreItem() produced a result —
     // independent of which URL is ultimately used as img_url.
     const isExtractedImg = !!(meta?.image?.url && String(meta.image.url).trim().length > 0);
-
-    const isPage = meta?.category === 'Page';
 
     // Calculate overlay_ratio from the active CoreItem's bounding rect
     let overlayRatio;
@@ -1293,10 +1289,6 @@ async function saveActiveCoreItem(request = {}) {
         overlayRatio = relayedRatio;
       }
     }
-
-    const isPortraitExtracted =
-      isPage &&
-      isExtractedImg;
 
     // CoreItem saves never capture a screenshot — just wait for repaint.
     await waitForRepaint();
@@ -1497,25 +1489,6 @@ async function saveActiveCoreItem(request = {}) {
 
     // Extract HTML context from the active CoreItem for AI type inference
     const htmlContext = extractCoreItemHtmlContext(activeItem);
-    // Fetch page_description via background.js HTTP fetch when
-    // category is Page — same approach as the full-page save path.
-    let coreItemPageDescription = '';
-    if (isPage) {
-      try {
-        const coreMetaResponse = await new Promise((resolve) => {
-          chrome.runtime.sendMessage(
-            { action: 'fetch-metadata', url },
-            (response) => {
-              resolve(chrome.runtime.lastError ? null : response);
-            }
-          );
-        });
-        if (coreMetaResponse?.success && coreMetaResponse.description) {
-          coreItemPageDescription = String(coreMetaResponse.description).trim();
-        }
-      } catch (e) {}
-    }
-
     const payload = {
       url,
       title: title || url,
@@ -1532,8 +1505,6 @@ async function saveActiveCoreItem(request = {}) {
       ...(meta?.platform      ? { platform:        meta.platform }      : {}),
       ...(meta?.confirmedType ? { confirmed_type:  meta.confirmedType } : {}),
       ...(Number.isFinite(overlayRatio) ? { overlay_ratio: overlayRatio } : {}),
-      is_portrait: isPortraitExtracted,
-      ...(isPage ? { page_description: coreItemPageDescription } : {}),
       img_url_method: isYouTubeSave
         ? 'youtube-thumbnail'
         : (isExtractedImg ? 'extracted' : 'favicon'),
@@ -1553,7 +1524,6 @@ async function saveActiveCoreItem(request = {}) {
           category:           String(meta?.category      || '').trim(),
           platform:           String(meta?.platform      || '').trim(),
           confirmedType:      String(meta?.confirmedType || '').trim(),
-          ...(isPage ? { page_description: coreItemPageDescription } : {}),
           img_url_method: isYouTubeSave
             ? 'youtube-thumbnail'
             : (isExtractedImg ? 'extracted' : 'favicon'),
@@ -1917,10 +1887,6 @@ function mountSaveMessageListener() {
         }
         if (IS_IFRAME || window.self !== window.top) return;
         try {
-          if (!_pageMetaInitialized) {
-            _pageMetaInitialized = true;
-            initPageLevelMetadata();
-          }
           // UI re-trigger removed: saved-urls-updated should sync data only.
           // Save feedback is handled directly in save paths.
         } catch (e) {}
@@ -2050,6 +2016,22 @@ function mountSaveMessageListener() {
           const saveFeedbackHidden = hideKCSaveFeedbackUi();
           const saveKickClipStartedAt = Date.now();
           try {
+            const meta = state.lastExtractedMetadata || {};
+            const imgUrl = String(meta?.image?.url || '').trim();
+
+            // === D4: image-less silent guard (iframe-side parity) ===
+            // The iframe's active CoreItem yielded no image at relay time.
+            // Mirroring D3 on the parent: do not paint the shutter, do not
+            // set the status badge, do not postMessage to window.top.
+            // Returning here lets the outer try/finally run
+            // finalizeKCSaveFeedback, which restores the metadata tooltip
+            // and re-applies the highlight. Parent's 80ms broadcast wait
+            // expires with no iframeHandled flag set, producing a silent
+            // no-op end-to-end.
+            if (!imgUrl) {
+              return;
+            }
+
             // Signed-out users get clipboard-only treatment in the top frame
             // (Phase 2). Force success shutter here so the iframe's visual matches —
             // no userId/server check is meaningful when no save will be attempted.
@@ -2071,9 +2053,6 @@ function mountSaveMessageListener() {
               setCoreStatusBadgeText(successText);
             }
             await waitForRepaint();
-
-            const meta = state.lastExtractedMetadata || {};
-            const imgUrl = String(meta?.image?.url || '').trim();
 
             // Calculate overlay_ratio from the iframe's active CoreItem bounding rect
             let overlayRatioRelay;
@@ -2204,12 +2183,10 @@ function mountWindowListeners() {
       if (IS_IFRAME) return; // top frame handles badge state
       if (!_mouseHasMovedOnPage) return;
       try {
-      if (state.activeCoreItem) {
-        showCoreHighlight(state.activeCoreItem, false);
-        showCoreStatusBadge('default');
-      } else {
-        initPageLevelMetadata();
-      }
+        if (state.activeCoreItem) {
+          showCoreHighlight(state.activeCoreItem, false);
+          showCoreStatusBadge('default');
+        }
       } catch (e) {}
     }
   }, { passive: true });
@@ -2292,7 +2269,6 @@ function mountWindowListeners() {
     // Shared restore logic for when the browser regains focus or tab becomes visible.
     const onBrowserVisible = () => {
       _windowFocused = true;
-      try { initPageLevelMetadata(); } catch (e) {}
     };
 
     // Case 1: tab switch (visibilitychange fires, window.blur also fires but
@@ -2408,31 +2384,19 @@ function mountLifecycle() {
   mountObservers();
   mountSaveMessageListener();
   mountInstagramShortcodeObserver();
-  // Only show full-page highlight and init page metadata in the top frame.
-  // iframe contexts still run CoreItem detection but must not render the
-  // full-page overlay.
+  // Top-frame-only initialization. iframe contexts still run CoreItem
+  // detection but must not render the full-page overlay.
   if (window.self === window.top) {
     // Populate _savedUrlSet from background cache (restored from chrome.storage.local)
-    // before running initPageLevelMetadata() so the first isSaved check is accurate.
+    // so the first isSaved check is accurate.
     try {
       chrome.runtime.sendMessage({ action: 'get-saved-urls' }, (response) => {
         if (!chrome.runtime.lastError && Array.isArray(response?.urls)) {
           const normalized = normalizeSavedUrlsResponse(response.urls);
           _savedUrlSet = new Set(normalized);
         }
-        // Only init page meta here if saved-urls-updated hasn't
-        // already done it (e.g. on normal page load without sign-in delay)
-        if (!_pageMetaInitialized) {
-          _pageMetaInitialized = true;
-          initPageLevelMetadata();
-        }
       });
-    } catch (e) {
-      if (!_pageMetaInitialized) {
-        _pageMetaInitialized = true;
-        initPageLevelMetadata();
-      }
-    }
+    } catch (e) {}
     mountIframeSaveQueryListener();
   }
 }
@@ -2475,7 +2439,6 @@ window.__kcApplyCoreItem = (coreItem) => {
       try { hideCoreHighlight(); } catch (e) {}
     } else {
       clearCoreSelection();
-      initPageLevelMetadata();
     }
     return null;
   }

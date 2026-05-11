@@ -192,7 +192,6 @@ function formatItemAsMarkdown(item) {
   const confirmed = String(item.confirmed_type || item.confirmedType || '').trim();
   const platform = String(item.platform || '').trim();
   const imgUrl = String(item.img_url || '').trim();
-  const pageDescription = String(item.page_description || '').trim();
 
   const fm = ['---'];
   fm.push(`title: "${escapeYamlDoubleQuoted(titleOneLine)}"`);
@@ -211,10 +210,6 @@ function formatItemAsMarkdown(item) {
   const lines = [...fm, `# ${titleOneLine}`, ''];
   if (imgUrl) {
     lines.push(`![preview](${imgUrl})`);
-    lines.push('');
-  }
-  if (pageDescription) {
-    lines.push(pageDescription);
     lines.push('');
   }
   lines.push('---');
