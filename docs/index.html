@@ -16,7 +16,11 @@
   }
   h1 { color: #BC13FE; margin-bottom: 8px; }
   .tagline { color: #666; margin-top: 0; font-size: 16px; }
-  .links { margin-top: 48px; padding: 24px; background: #faf7fd; border-radius: 12px; }
+  .features { margin-top: 32px; padding: 20px 24px; background: #faf7fd; border-radius: 12px; }
+  .features h2 { color: #BC13FE; margin-top: 0; font-size: 18px; }
+  .features ul { padding-left: 20px; margin: 12px 0 0 0; }
+  .features li { margin-bottom: 6px; }
+  .links { margin-top: 32px; padding: 24px; background: #faf7fd; border-radius: 12px; }
   .links h2 { color: #BC13FE; margin-top: 0; font-size: 18px; }
   .links a {
     display: block;
@@ -26,6 +30,15 @@
     font-weight: 500;
   }
   .links a:hover { text-decoration: underline; }
+  kbd {
+    background: #f4f4f5;
+    border: 1px solid #e5e5e5;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 13px;
+    color: #1a1a1a;
+  }
   .footer {
     margin-top: 48px;
     padding-top: 24px;
@@ -35,15 +48,29 @@
   }
   @media (prefers-color-scheme: dark) {
     body { background: #1a1a1a; color: #f3f4f6; }
-    .links { background: #2a1a3a; }
+    .features, .links { background: #2a1a3a; }
+    kbd { background: #374151; border-color: #4b5563; color: #f3f4f6; }
     .footer { border-color: #374151; color: #9ca3af; }
   }
 </style>
 </head>
 <body>
   <h1>KickClip</h1>
-  <p class="tagline">웹 콘텐츠를 빠르게 저장하고 정리하는 Chrome 확장 프로그램</p>
-  <p>Chrome extension for quickly saving and organizing web content</p>
+  <p class="tagline">
+    <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>로 이미지와 SNS 게시물을 저장하는 Chrome 확장 프로그램
+  </p>
+  <p>Chrome extension to save images and social media posts with <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></p>
+
+  <div class="features">
+    <h2>주요 기능 / Features</h2>
+    <ul>
+      <li>⚡ 키보드 단축키로 즉시 저장 / One-key save with keyboard shortcut</li>
+      <li>📁 로컬 폴더 또는 Google Drive에 저장 / Save to local folder or Google Drive</li>
+      <li>🏷️ Img / SNS 카테고리로 자동 분류 / Auto-categorized into Img / SNS</li>
+      <li>📋 사이드 패널에서 카드 형태로 관리 / Browse saved items in side panel</li>
+      <li>🔒 개인정보 우선 · 오픈 소스 / Privacy-first · Open source</li>
+    </ul>
+  </div>
 
   <div class="links">
     <h2>개인정보처리방침 / Privacy Policy</h2>
@@ -57,7 +84,7 @@
   </div>
 
   <div class="footer">
-    <p>&copy; 2026 KickClip. Contact: tlstlsgns@gmail.com</p>
+    <p>&copy; 2026 KickClip. Contact: <a href="mailto:tlstlsgns@gmail.com" style="color: #888;">tlstlsgns@gmail.com</a></p>
   </div>
 </body>
 </html>
