@@ -6,8 +6,8 @@ import {
   findClusterContainerFromTarget,
   getItemMapEvidenceType,
   getItemMapEntryByElement,
-  resolveTypeACoreItem,
-  isValidTypeAAnchor,
+  resolveCoreItemFromImageAnchor,
+  isValidImageAnchor,
   extractMetadataForCoreItem,
   extractImageFromCoreItem,
   extractShortcode,
@@ -485,7 +485,7 @@ function requestInstagramPostDataForTypeB(coreItem, meta, clientX = null, client
  * For Type A CoreItems whose activeHoverUrl is an Instagram post URL,
  * fetches the thumbnail via background.js and updates the tooltip image.
  */
-function requestInstagramThumbnailForTypeA(coreItem, meta, clientX = null, clientY = null) {
+function requestInstagramThumbnail(coreItem, meta, clientX = null, clientY = null) {
   try {
     const activeHoverUrl = String(meta?.activeHoverUrl || '').trim();
     // Only process Instagram post URLs
@@ -550,11 +550,11 @@ function coreClear() {
  * Finds the first valid Type A anchor within a container (primary signal anchor).
  * Used as fallback when the hovered anchor fails validation.
  */
-async function findPrimaryTypeAAnchor(container) {
+async function findPrimaryImageAnchor(container) {
   if (!container || container.nodeType !== 1) return null;
   const anchors = container.querySelectorAll?.('a[href]') || [];
   for (const a of anchors) {
-    if (await isValidTypeAAnchor(a)) return a;
+    if (await isValidImageAnchor(a)) return a;
   }
   const getRoleLinkHrefLocal = (el) =>
     String(el.getAttribute?.('data-href')     || '').trim() ||
@@ -644,8 +644,8 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   let closestAtag = null;
   if (evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
     const anchor = target?.matches?.('a') ? target : target?.closest?.('a');
-    const anchorValid = anchor && (await isValidTypeAAnchor(anchor));
-    const effectiveTarget = anchorValid ? target : await findPrimaryTypeAAnchor(coreItemContainer);
+    const anchorValid = anchor && (await isValidImageAnchor(anchor));
+    const effectiveTarget = anchorValid ? target : await findPrimaryImageAnchor(coreItemContainer);
     if (!effectiveTarget) {
       if (state.activeCoreItem) coreClear();
       return false;
@@ -655,9 +655,9 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         .map((x) => x?.element)
         .filter(Boolean)
     );
-    coreItem = await resolveTypeACoreItem(coreItemContainer, effectiveTarget, itemMapElementsSet);
+    coreItem = await resolveCoreItemFromImageAnchor(coreItemContainer, effectiveTarget, itemMapElementsSet);
     // Guard rail: if the resolved coreItem does not contain target, reject it.
-    // This catches cases where resolveTypeACoreItem() returns a childWithClosest
+    // This catches cases where resolveCoreItemFromImageAnchor() returns a childWithClosest
     // that target is not actually inside.
     if (coreItem && coreItem !== coreItemContainer && !coreItem.contains?.(target)) {
       if (state.activeCoreItem) coreClear();
@@ -798,7 +798,7 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     requestInstagramPostDataForTypeB(coreItem, state.lastExtractedMetadata, clientX, clientY);
   }
   if (evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
-    requestInstagramThumbnailForTypeA(coreItem, state.lastExtractedMetadata, clientX, clientY);
+    requestInstagramThumbnail(coreItem, state.lastExtractedMetadata, clientX, clientY);
   }
   return true;
 }
@@ -1479,7 +1479,6 @@ async function saveActiveCoreItem(request = {}) {
       ...(tempId ? { temp_id: tempId } : {}),
       ...(htmlContext ? { htmlContext } : {}),
       ...(faviconImgUrl ? { img_url: faviconImgUrl } : {}),
-      is_extracted_img: isExtractedImg,
       ...(userId ? { userId } : {}),
       ...(meta?.category      ? { category:       meta.category }      : {}),
       ...(meta?.platform      ? { platform:        meta.platform }      : {}),
@@ -1944,9 +1943,6 @@ function mountSaveMessageListener() {
                 confirmedType: iframeRelayData.confirmedType || '',
                 image: iframeRelayData.imgUrl ? { url: iframeRelayData.imgUrl } : null,
                 _pageUrl: iframeRelayData.pageUrl || '',
-                _isExtractedImg: typeof iframeRelayData.isExtractedImg === 'boolean'
-                  ? iframeRelayData.isExtractedImg
-                  : !!(iframeRelayData.imgUrl && String(iframeRelayData.imgUrl).trim().length > 0),
                 _isIframeRelay: true,
               };
 
@@ -2040,7 +2036,6 @@ function mountSaveMessageListener() {
                 category: String(meta?.category || '').trim(),
                 platform: String(meta?.platform || '').trim(),
                 confirmedType: String(meta?.confirmedType || '').trim(),
-                isExtractedImg: !!(meta?.image?.url && String(meta.image.url || '').trim().length > 0),
                 pageUrl: String(window.location.href || '').trim(),
               },
               '*'

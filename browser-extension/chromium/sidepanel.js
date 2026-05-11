@@ -991,7 +991,6 @@ function createDataCard(item) {
   const itemId       = item.id || getItemId(item);
   const cardId       = `item-${itemId.replace(/[^a-zA-Z0-9]/g, '_')}`;
   const escapedUrl   = (item.url || '').replace(/"/g, '&quot;');
-  const type         = item.type || 'webpage';
   const displayTitle = item.title || 'Untitled';
   const escapedTitle = displayTitle.replace(/"/g, '&quot;');
   const imgUrl       = (item.img_url || '').trim();
@@ -1066,7 +1065,6 @@ function createDataCard(item) {
            class="data-card"
            data-url="${escapedUrl}"
            data-title="${escapedTitle}"
-           data-type="${type}"
            data-img-url="${escapedImgUrl}"
            data-item-id="${itemId}"
            data-doc-id="${item.id || ''}"
@@ -1091,7 +1089,6 @@ function createDataCard(item) {
          class="data-card"
          data-url="${escapedUrl}"
          data-title="${escapedTitle}"
-         data-type="${type}"
          data-img-url="${escapedImgUrl}"
          data-item-id="${itemId}"
          data-doc-id="${item.id || ''}"
@@ -1116,7 +1113,6 @@ function createCardElement(item, isNew = false) {
   if (!card.dataset.itemId) card.dataset.itemId = itemId;
   if (!card.dataset.url)    card.dataset.url    = item.url;
   if (!card.dataset.title)  card.dataset.title  = item.title || 'Untitled';
-  if (!card.dataset.type)   card.dataset.type   = item.type  || 'webpage';
   if (item.directoryId && item.directoryId !== 'undefined') {
     card.dataset.directoryId = item.directoryId;
   }
@@ -1325,7 +1321,6 @@ function addOptimisticCard({ tempId, url, title, imgUrl, category, platform, con
     url:         url || '',
     title:       title || 'Untitled',
     img_url:     imgUrl || '',
-    type:        imgUrl ? 'image' : 'webpage',
     domain:      (() => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } })(),
     directoryId: 'undefined',
     order:       -Infinity, // Always at the top

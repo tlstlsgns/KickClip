@@ -2182,7 +2182,7 @@ async function isImgVisuallySignificantForAnchor(img) {
   }
 }
 
-export async function isValidTypeAAnchor(anchor) {
+export async function isValidImageAnchor(anchor) {
   try {
     if (!anchor || anchor.nodeType !== 1 || !anchor.matches?.('a[href]')) return false;
     const url = resolveAnchorUrl(anchor);
@@ -2220,13 +2220,13 @@ export async function isValidTypeAAnchor(anchor) {
   }
 }
 
-export async function resolveTypeACoreItem(itemMapElement, hoveredTarget = null, itemMapElements = null) {
+export async function resolveCoreItemFromImageAnchor(itemMapElement, hoveredTarget = null, itemMapElements = null) {
   try {
     if (!itemMapElement || itemMapElement.nodeType !== 1) return itemMapElement;
     const anchor =
       hoveredTarget?.matches?.('a[href]') ? hoveredTarget : hoveredTarget?.closest?.('a[href]');
     const contained = anchor && itemMapElement.contains?.(anchor);
-    const validSignal = anchor && contained && (await isValidTypeAAnchor(anchor));
+    const validSignal = anchor && contained && (await isValidImageAnchor(anchor));
     const closestAtag = validSignal ? anchor : null;
     if (!closestAtag) return itemMapElement;
 
@@ -3496,7 +3496,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       };
     }
 
-    // ── Step 3: Dominant media check (non-SNS) ────────────────────────────────
+    // ── Step 2: Dominant media check (non-SNS) ────────────────────────────────
     // Only DOMINANT IMAGE classifies as Image category.
     // Dominant Video falls through to the null-category default — Video is not a distinct category.
     const dominantType = getDominantMediaType();
@@ -3504,7 +3504,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       return { category: 'Image', platform: getPageDomain(), confirmedType: '' };
     }
 
-    // ── Step 4: Same-origin URL-based ─────────────────────────────────────────
+    // ── Step 3: Same-origin URL-based ─────────────────────────────────────────
     // Only image file extensions classify as Image. Video extensions and video-host URLs
     // fall through to the null-category default.
     const savedDomain = getSavedDomain();
@@ -3517,7 +3517,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       }
     }
 
-    // ── Step 5: Weighted scoring ──────────────────────────────────────────────
+    // ── Step 4: Weighted scoring ──────────────────────────────────────────────
     // Only scores toward IMAGE classification. Video signals are ignored.
     // A page reaches Image only when there is a clear, single image focus.
     {
@@ -3538,7 +3538,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       }
     }
 
-    // ── Step 6: Default — no recognized category ─────────────────────────────
+    // ── Step 5: Default — no recognized category ─────────────────────────────
     // KickClip now classifies only SNS and Image. Pages that match neither
     // return a null category, and downstream flows treat that as "no clip
     // target" (silent no-op gate is added in D3).

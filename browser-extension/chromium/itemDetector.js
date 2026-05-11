@@ -7,7 +7,7 @@
 import { state } from './stateLite.js';
 import {
   resolveAnchorUrl,
-  isValidTypeAAnchor,
+  isValidImageAnchor,
   extractMetadataForCoreItem,
   extractShortcode,
   getCurrentPlatform,
@@ -924,7 +924,7 @@ async function collectDeepContentStats(el) {
     }
     const textLen = getTextLen(el);
     const anchors = el.querySelectorAll ? Array.from(el.querySelectorAll('a[href]') || []) : [];
-    const anchorResults = await Promise.all(anchors.map((a) => isValidTypeAAnchor(a)));
+    const anchorResults = await Promise.all(anchors.map((a) => isValidImageAnchor(a)));
     const anchorCount = anchorResults.filter(Boolean).length;
     const mediaCount = el.querySelectorAll ? el.querySelectorAll('img,video,picture,canvas').length : 0;
     const visualCount = countMeaningfulVisuals(el);
