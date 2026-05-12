@@ -9,6 +9,7 @@ export {
   detectItemMaps,
   getItemMapFingerprint,
   findClusterContainerFromTarget,
+  findItemByImage,
   getItemMapEvidenceType,
   ensureClusterCacheFromState,
   getElementSignature,

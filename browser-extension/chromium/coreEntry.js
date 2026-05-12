@@ -3,10 +3,8 @@ import {
   detectItemMaps,
   EVIDENCE_TYPE_IMAGE_ANCHOR,
   getItemMapFingerprint,
-  findClusterContainerFromTarget,
-  getItemMapEvidenceType,
+  findItemByImage,
   getItemMapEntryByElement,
-  resolveCoreItemFromImageAnchor,
   isValidImageAnchor,
   extractMetadataForCoreItem,
   extractImageFromCoreItem,
@@ -574,97 +572,51 @@ async function findPrimaryImageAnchor(container) {
 }
 
 async function updateCoreSelectionFromTarget(target, clientX = null, clientY = null) {
+  // === PHASE27B_HOVER_DISPATCH ===
+  // Phase 27 image-keyed activation:
+  // - Hover guard upstream already filtered to <img> targets.
+  // - Lookup is O(1) through the image-keyed candidate map.
+  // - Type B / D / E share the same simple flow.
+  // - Type D has no anchor/role/pointer pre-guard and no
+  //   child-refinement step; the candidate's element is taken
+  //   as-is.
+  // - Type E forces meta.activeHoverUrl = window.location.href
+  //   so clip path has a usable URL.
+  // - Type D does NOT fabricate a URL. If extraction yields no
+  //   activeHoverUrl, activation does not proceed (preserves
+  //   Type D's purpose: clip the linked resource, not the page).
+  // - Type B keeps its existing cache + platform enrichment.
+
   if (!target || target.nodeType !== 1) {
     if (state.activeCoreItem) coreClear();
     return false;
   }
+
+  // Image-keyed lookup. ensureClusterCacheFromState() rebuilds
+  // both clusterLookup and imageToItem from state.itemMap on
+  // every dispatch, so the lookup is always fresh.
   ensureClusterCacheFromState();
-  const coreItemContainer = findClusterContainerFromTarget(target);
+  const itemEntry = findItemByImage(target);
   const active = state.activeCoreItem;
-  if (!coreItemContainer) {
+  if (!itemEntry || !itemEntry.element) {
     if (state.activeCoreItem) coreClear();
     return false;
   }
-  const evidenceType = getItemMapEvidenceType(coreItemContainer);
-  if (evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
-    const anchor = target?.matches?.('a') ? target : target?.closest?.('a');
-    const hasAnchor = !!anchor;
-    const contained = hasAnchor && !!coreItemContainer.contains?.(anchor);
 
-    // Also accept role="link" + URL data attributes as valid anchor signal
-    const roleLinkEl = target?.closest?.('[role="link"][data-href], [role="link"][data-url], [role="link"][data-link], [role="link"][data-href-url]');
-    const hasRoleLink = !!roleLinkEl && !!coreItemContainer.contains?.(roleLinkEl);
+  const evidenceType = itemEntry.evidenceType;
+  const coreItem = itemEntry.element;
+  const closestAtag = null;
 
-    const hasPointerCursor =
-      target && window.getComputedStyle ? window.getComputedStyle(target).cursor === 'pointer' : false;
-    const shouldExit =
-      (hasAnchor && !contained) ||
-      (!hasAnchor && !hasRoleLink && !hasPointerCursor);
-    if (shouldExit) {
-      if (state.activeCoreItem) coreClear();
-      return false;
-    }
-  }
-
+  // Type B LinkedIn block (preserved from prior implementation).
   const platformForB = evidenceType === 'B' ? getCurrentPlatform() : '';
-
-  // LinkedIn Type B detection is disabled until dedicated URL/image extraction
-  // logic is implemented. Fall through to coreClear() to avoid
-  // showing an incorrect CoreItem highlight or saving the wrong URL.
   if (evidenceType === 'B' && platformForB === 'LINKEDIN') {
     if (state.activeCoreItem) coreClear();
     return false;
   }
 
-  const typeBEntry = evidenceType === 'B' ? getItemMapEntryByElement(coreItemContainer) : null;
+  // Type B cache hookup (preserved).
+  const typeBEntry = evidenceType === 'B' ? getItemMapEntryByElement(coreItem) : null;
   const cachedExtraction = typeBEntry?.cachedShortcodeNormalized ?? null;
-
-  // ── Instagram: dedicated shortcode extraction runs FIRST ─────────────────
-  // Extract shortcode without any visual/size/visibility checks.
-  // If found, build the canonical post URL immediately and use it as the
-  // authoritative activeHoverUrl regardless of what generic logic would find.
-  let instagramPreresolvedUrl = '';
-  if (evidenceType === 'B' && platformForB === 'INSTAGRAM') {
-    const shortcodeResult =
-      cachedExtraction ??
-      normalizeShortcodeExtractionResult(extractShortcode(coreItemContainer), platformForB);
-    const shortcode = String(shortcodeResult?.shortcode || '').trim();
-    if (shortcode) {
-      instagramPreresolvedUrl = `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/`;
-    }
-  }
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const shortcodeForB =
-    evidenceType === 'B' && platformForB === 'INSTAGRAM'
-      ? (cachedExtraction?.shortcode || '').trim() ||
-        normalizeShortcodeExtractionResult(extractShortcode(coreItemContainer), platformForB).shortcode
-      : '';
-  let coreItem = coreItemContainer;
-  let closestAtag = null;
-  if (evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
-    const anchor = target?.matches?.('a') ? target : target?.closest?.('a');
-    const anchorValid = anchor && (await isValidImageAnchor(anchor));
-    const effectiveTarget = anchorValid ? target : await findPrimaryImageAnchor(coreItemContainer);
-    if (!effectiveTarget) {
-      if (state.activeCoreItem) coreClear();
-      return false;
-    }
-    const itemMapElementsSet = new Set(
-      (Array.isArray(state.itemMap) ? state.itemMap : [])
-        .map((x) => x?.element)
-        .filter(Boolean)
-    );
-    coreItem = await resolveCoreItemFromImageAnchor(coreItemContainer, effectiveTarget, itemMapElementsSet);
-    // Guard rail: if the resolved coreItem does not contain target, reject it.
-    // This catches cases where resolveCoreItemFromImageAnchor() returns a childWithClosest
-    // that target is not actually inside.
-    if (coreItem && coreItem !== coreItemContainer && !coreItem.contains?.(target)) {
-      if (state.activeCoreItem) coreClear();
-      return false;
-    }
-    closestAtag = anchorValid ? anchor : effectiveTarget;
-  }
   const cacheOverrides =
     evidenceType === 'B' && typeBEntry?.cachedMetadata
       ? {
@@ -683,9 +635,24 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
       ? extractMetadataForCoreItem(coreItem, closestAtag, target, cacheOverrides) || {}
       : extractMetadataForCoreItem(coreItem, closestAtag, target) || {};
 
-  // ── Instagram: override activeHoverUrl with pre-resolved URL ─────────────
-  // If dedicated shortcode extraction succeeded, always use that URL.
-  // Generic logic result is used only as fallback when shortcode was not found.
+  // Instagram pre-resolved URL (Type B only, preserved).
+  let instagramPreresolvedUrl = '';
+  if (evidenceType === 'B' && platformForB === 'INSTAGRAM') {
+    const shortcodeResult =
+      cachedExtraction ??
+      normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
+    const shortcode = String(shortcodeResult?.shortcode || '').trim();
+    if (shortcode) {
+      instagramPreresolvedUrl = `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/`;
+    }
+  }
+  const shortcodeForB =
+    evidenceType === 'B' && platformForB === 'INSTAGRAM'
+      ? (cachedExtraction?.shortcode || '').trim() ||
+        normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB).shortcode
+      : '';
+
+  // Type B platform-specific URL enrichment (preserved).
   if (evidenceType === 'B' && platformForB === 'INSTAGRAM' && instagramPreresolvedUrl) {
     meta = {
       ...meta,
@@ -694,47 +661,63 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
       shortcode: shortcodeForB,
     };
   } else if (evidenceType === 'B' && platformForB === 'INSTAGRAM') {
-    // Shortcode extraction failed — fall back to generic withInstagramActiveHoverUrl
     meta = withInstagramActiveHoverUrl(
       { ...meta, platform: platformForB, ...(shortcodeForB ? { shortcode: shortcodeForB } : {}) },
-      coreItemContainer,
+      coreItem,
       cachedExtraction
     );
   } else if (evidenceType === 'B' && platformForB === 'LINKEDIN') {
-    const li = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItemContainer), platformForB);
+    const li = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
     meta = withLinkedInCanonicalActiveHoverUrl(
       { ...meta, platform: platformForB, ...(li.shortcode ? { shortcode: li.shortcode } : {}), ...(li.activeHoverUrl ? { activeHoverUrl: li.activeHoverUrl } : {}) },
-      coreItemContainer,
+      coreItem,
       cachedExtraction
     );
   } else if (evidenceType === 'B' && platformForB === 'THREADS') {
-    const th = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItemContainer), platformForB);
+    const th = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
     meta = withThreadsActiveHoverUrl(
       { ...meta, platform: platformForB, ...(th.shortcode ? { shortcode: th.shortcode } : {}), ...(th.activeHoverUrl ? { activeHoverUrl: th.activeHoverUrl } : {}) },
-      coreItemContainer,
+      coreItem,
       cachedExtraction
     );
   } else if (evidenceType === 'B' && platformForB === 'FACEBOOK') {
-    const fb = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItemContainer), platformForB);
+    const fb = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
     meta = withFacebookTimestampActiveHoverUrl(
       { ...meta, platform: platformForB, ...(fb.activeHoverUrl ? { activeHoverUrl: fb.activeHoverUrl } : {}), ...(fb.imageUrl ? { image: { ...(meta?.image || {}), url: fb.imageUrl } } : {}) },
-      coreItemContainer,
+      coreItem,
       cachedExtraction
     );
   }
+
+  // === PHASE27B_TYPE_E_URL_FALLBACK ===
+  // Type E does not have its own URL source (the candidate is an
+  // <img> with no descendant anchors). Force the page URL so the
+  // clip path has a usable activeHoverUrl.
+  if (evidenceType === 'E') {
+    meta = { ...meta, activeHoverUrl: String(window.location.href || '') };
+  }
+  // === END PHASE27B_TYPE_E_URL_FALLBACK ===
+
+  // Type B no-URL gate (preserved). Type B without a URL must not
+  // activate; the prior Instagram/Threads/Facebook enrichment was
+  // its only chance to produce one.
+  // Type D no-URL gate (Phase 27 decision 5-γ): if extraction
+  // yields no activeHoverUrl for Type D, activation does not
+  // proceed. Type D's purpose is to clip the linked resource,
+  // not the page.
+  // Type E never reaches this gate because the override above
+  // always assigns a URL.
   if (!meta?.activeHoverUrl) {
-    // Keep current state briefly to avoid flicker around tiny DOM gaps.
     if (active && active.contains?.(target)) {
-      showCoreHighlight(
-        active,
-        false
-      );
-      // positionMetadataTooltip disabled — CoreItem hover uses status badge only
+      showCoreHighlight(active, false);
       return true;
     }
     if (state.activeCoreItem) coreClear();
     return false;
   }
+
+  // Type B post-extraction shortcode + Facebook timestamp
+  // enrichment (preserved).
   let syncedMeta = meta;
   if (evidenceType === 'B') {
     const platform = getCurrentPlatform();
@@ -749,8 +732,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         };
       }
     }
-    // If instagramPreresolvedUrl was already set, skip withInstagramActiveHoverUrl
-    // to prevent it from being overridden or blocked
     if (instagramPreresolvedUrl) {
       syncedMeta = {
         ...syncedMeta,
@@ -763,7 +744,8 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     syncedMeta = withThreadsActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
     syncedMeta = withFacebookTimestampActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
   }
-  // Detect category at hover time so it can be included in the save payload
+
+  // Category enrichment (preserved, runs for any type with a URL).
   if (syncedMeta.activeHoverUrl) {
     try {
       const htmlCtx = extractCoreItemHtmlContext(coreItem);
@@ -773,10 +755,12 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         htmlCtx
       );
       syncedMeta = { ...syncedMeta, category };
-      if (platform)      syncedMeta = { ...syncedMeta, platform };
+      if (platform) syncedMeta = { ...syncedMeta, platform };
       if (confirmedType) syncedMeta = { ...syncedMeta, confirmedType };
     } catch (e) {}
   }
+
+  // Final activation. The iframe-vs-top split is preserved.
   if (IS_IFRAME) {
     state.activeCoreItem = coreItem;
     state.activeHoverUrl = syncedMeta.activeHoverUrl;
@@ -792,7 +776,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   state.activeHoverUrl = syncedMeta.activeHoverUrl;
   state.lastExtractedMetadata = syncedMeta;
   showCoreHighlight(coreItem, false);
-  // showMetadataTooltip disabled — CoreItem hover uses status badge only
   showCoreStatusBadge('default');
   if (evidenceType === 'B') {
     requestInstagramPostDataForTypeB(coreItem, state.lastExtractedMetadata, clientX, clientY);
@@ -801,6 +784,7 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     requestInstagramThumbnail(coreItem, state.lastExtractedMetadata, clientX, clientY);
   }
   return true;
+  // === END PHASE27B_HOVER_DISPATCH ===
 }
 
 /**
@@ -2087,10 +2071,27 @@ function mountWindowListeners() {
       target?.closest?.('#video-preview') &&
       /^https:\/\/www\.youtube\.com(\/|$)/.test(String(window.location.href || ''))
     ) return;
-    // Skip if the target is inside the already-active CoreItem —
-    // no highlight change is needed and coreClear must not fire.
+    // Preserve active state when moving within the same CoreItem.
     const active = state.activeCoreItem;
     if (active && target && active.contains(target)) return;
+    // === PHASE27C_NONIMG_CLEAR ===
+    // Phase 27 image-keyed activation: only <img> targets can
+    // initiate a new CoreItem activation. Non-img targets that
+    // are NOT inside the currently active CoreItem cannot start
+    // a new activation, but they MUST clear any existing
+    // activation so the user-visible highlight disappears when
+    // the cursor leaves the active <img>.
+    // Order of operations:
+    //   - active.contains(target) above already preserved the
+    //     in-card case, so reaching this line means target is
+    //     outside the active CoreItem (or there is no active).
+    //   - Non-img: clear if active, then return without dispatch.
+    //   - Img: proceed to updateCoreSelectionFromTarget(...).
+    if (!target || String(target.tagName || '').toUpperCase() !== 'IMG') {
+      if (active) coreClear();
+      return;
+    }
+    // === END PHASE27C_NONIMG_CLEAR ===
     await updateCoreSelectionFromTarget(target, e.clientX, e.clientY);
   }, { passive: true, capture: true });
   window.addEventListener('mousemove', (e) => {
@@ -2358,112 +2359,13 @@ function mountLifecycle() {
   }
 }
 
-window.__kcApplyCoreItem = (coreItem) => {
-  const evidenceType = getItemMapEvidenceType(coreItem);
-  const platformForB = evidenceType === 'B' ? getCurrentPlatform() : '';
-  const shortcodeForB =
-    evidenceType === 'B' && platformForB === 'INSTAGRAM'
-      ? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB).shortcode
-      : '';
-  let meta = extractMetadataForCoreItem(coreItem, null, coreItem) || {};
-  if (evidenceType === 'B' && platformForB === 'INSTAGRAM') {
-    meta = withInstagramActiveHoverUrl({ ...meta, platform: platformForB, ...(shortcodeForB ? { shortcode: shortcodeForB } : {}) }, coreItem);
-  } else if (evidenceType === 'B' && platformForB === 'LINKEDIN') {
-    const li = normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-    meta = withLinkedInCanonicalActiveHoverUrl(
-      { ...meta, platform: platformForB, ...(li.shortcode ? { shortcode: li.shortcode } : {}), ...(li.activeHoverUrl ? { activeHoverUrl: li.activeHoverUrl } : {}) },
-      coreItem
-    );
-  } else if (evidenceType === 'B' && platformForB === 'THREADS') {
-    const th = normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-    meta = withThreadsActiveHoverUrl(
-      { ...meta, platform: platformForB, ...(th.shortcode ? { shortcode: th.shortcode } : {}), ...(th.activeHoverUrl ? { activeHoverUrl: th.activeHoverUrl } : {}) },
-      coreItem
-    );
-  } else if (evidenceType === 'B' && platformForB === 'FACEBOOK') {
-    const fb = normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-    meta = withFacebookTimestampActiveHoverUrl(
-      { ...meta, platform: platformForB, ...(fb.activeHoverUrl ? { activeHoverUrl: fb.activeHoverUrl } : {}), ...(fb.imageUrl ? { image: { ...(meta?.image || {}), url: fb.imageUrl } } : {}) },
-      coreItem
-    );
-  }
-  if (!meta?.activeHoverUrl) {
-    _aiAnalyzeSession++;
-    if (IS_IFRAME) {
-      state.activeCoreItem = null;
-      state.activeHoverUrl = null;
-      state.lastExtractedMetadata = null;
-      try { hideCoreHighlight(); } catch (e) {}
-    } else {
-      clearCoreSelection();
-    }
-    return null;
-  }
-  let syncedMeta = meta;
-  if (evidenceType === 'B') {
-    const platform = getCurrentPlatform();
-    syncedMeta = { ...syncedMeta, platform };
-    if (platform !== 'FACEBOOK') {
-      const shortcodeResult = normalizeShortcodeExtractionResult(extractShortcode(coreItem), platform);
-      if (shortcodeResult.shortcode) {
-        syncedMeta = {
-          ...syncedMeta,
-          shortcode: shortcodeResult.shortcode,
-          ...(shortcodeResult.activeHoverUrl ? { activeHoverUrl: shortcodeResult.activeHoverUrl } : {}),
-        };
-      }
-    }
-    syncedMeta = withInstagramActiveHoverUrl(syncedMeta, coreItem);
-    syncedMeta = withLinkedInCanonicalActiveHoverUrl(syncedMeta, coreItem);
-    syncedMeta = withThreadsActiveHoverUrl(syncedMeta, coreItem);
-    syncedMeta = withFacebookTimestampActiveHoverUrl(syncedMeta, coreItem);
-  }
-  // Detect category at hover time so it can be included in the save payload
-  if (syncedMeta.activeHoverUrl) {
-    try {
-      const htmlCtx = extractCoreItemHtmlContext(coreItem);
-      const { category, platform, confirmedType } = detectItemCategory(
-        syncedMeta.activeHoverUrl,
-        window.location.href,
-        htmlCtx
-      );
-      syncedMeta = { ...syncedMeta, category };
-      if (platform)      syncedMeta = { ...syncedMeta, platform };
-      if (confirmedType) syncedMeta = { ...syncedMeta, confirmedType };
-    } catch (e) {}
-  }
-  if (IS_IFRAME) {
-    state.activeCoreItem = coreItem;
-    state.activeHoverUrl = syncedMeta.activeHoverUrl;
-    state.lastExtractedMetadata = syncedMeta;
-    showCoreHighlight(coreItem, false);
-    showCoreStatusBadge('default');
-    const coreRect = coreItem.getBoundingClientRect ? coreItem.getBoundingClientRect() : null;
-    let tipX = null;
-    let tipY = null;
-    if (coreRect && coreRect.width > 0 && coreRect.height > 0) {
-      tipX = coreRect.right;
-      tipY = coreRect.top;
-    }
-    if (evidenceType === 'B') {
-      requestInstagramPostDataForTypeB(coreItem, state.lastExtractedMetadata, tipX, tipY);
-    }
-    return syncedMeta;
-  }
-  state.activeCoreItem = coreItem;
-  state.activeHoverUrl = syncedMeta.activeHoverUrl;
-  state.lastExtractedMetadata = syncedMeta;
-  showCoreHighlight(coreItem, false);
-  const rect = coreItem.getBoundingClientRect ? coreItem.getBoundingClientRect() : null;
-  const x = rect ? rect.right : null;
-  const y = rect ? rect.top : null;
-  // showMetadataTooltip disabled — CoreItem hover uses status badge only
-  showCoreStatusBadge('default');
-  if (evidenceType === 'B') {
-    requestInstagramPostDataForTypeB(coreItem, state.lastExtractedMetadata, x, y);
-  }
-  return syncedMeta;
-};
+// === PHASE27B_REMOVED_GLOBAL ===
+// window.__kcApplyCoreItem was an out-of-band activation entry
+// point with no in-repo callers. It maintained its own copy of
+// the URL gate and a divergent metadata path. Phase 27 removes
+// it to keep activation flow in a single canonical place
+// (updateCoreSelectionFromTarget).
+// === END PHASE27B_REMOVED_GLOBAL ===
 
 // Do not run in Electron-based desktop apps (e.g. Claude Desktop, VS Code, Notion).
 // These apps embed a Chromium engine but are not regular browser tabs —
