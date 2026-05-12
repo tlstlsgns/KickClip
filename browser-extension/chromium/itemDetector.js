@@ -615,6 +615,74 @@ function isImageDominantInCoreItem(imageRect, coreRect) {
   }
 }
 
+function isInsideNavLikeAncestor(el) {
+  try {
+    let cur = el?.parentElement || null;
+    while (cur && cur !== document.body) {
+      const tag = String(cur.tagName || '').toUpperCase();
+      if (TYPED_NAV_TAGS.has(tag)) return true;
+      const role = String(cur.getAttribute?.('role') || '').toLowerCase().trim();
+      if (TYPED_NAV_ROLES.has(role)) return true;
+      cur = cur.parentElement;
+    }
+  } catch (e) {
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Phase 21: shared significant-image pool for Type D and Type E.
+ * Threshold is viewport-independent: Math.max(80, cappedRootFontSize * 2),
+ * preserving the existing root-font cap at 16.
+ *
+ * Returns Array<{ img, rect }>.
+ */
+function filterSignificantImages(root = document) {
+  const significantImages = [];
+  if (!root || !root.querySelectorAll) return significantImages;
+
+  const rootFontSizeRaw = (() => {
+    try {
+      const rootEl = document.documentElement;
+      const cs = rootEl && window.getComputedStyle ? window.getComputedStyle(rootEl) : null;
+      const px = parseFloat(String(cs?.fontSize || '16'));
+      return isFinite(px) && px > 0 ? px : 16;
+    } catch (e) {
+      return 16;
+    }
+  })();
+  const cappedRootFontSize = Math.min(rootFontSizeRaw, 16);
+  const minContentSize = Math.max(80, cappedRootFontSize * 2);
+
+  const allImgs = Array.from(root.querySelectorAll('img[src]') || []);
+  for (const img of allImgs) {
+    if (img.getAttribute?.('aria-hidden') === 'true') {
+      const probeRect = img.getBoundingClientRect?.();
+      const visuallyLarge = probeRect && probeRect.width >= 100 && probeRect.height >= 100;
+      if (!visuallyLarge) continue;
+    }
+
+    const naturalW = Number(img.naturalWidth || 0);
+    if (naturalW > 0 && naturalW < 20) continue;
+
+    const rect = getEffectiveImageRectForImageGate(img);
+    if (!rect) continue;
+    const w = Math.max(0, Number(rect.width || 0));
+    const h = Math.max(0, Number(rect.height || 0));
+    if (w < minContentSize || h < minContentSize) continue;
+
+    const ratio = h > 0 ? w / h : Number.POSITIVE_INFINITY;
+    if (ratio < 0.2 || ratio > 5.0) continue;
+
+    if (isInsideNavLikeAncestor(img)) continue;
+
+    significantImages.push({ img, rect });
+  }
+
+  return significantImages;
+}
+
 async function getEvidenceType(el) {
   try {
     if (!el || el.nodeType !== 1) return '';
@@ -1168,67 +1236,21 @@ function hasMatchingPathDownToImage(sibParent, pathSig) {
  */
 async function detectTypeDItemMaps(root = document) {
   const candidates = [];
+  const rejectedImages = [];
   const processedImages = new WeakSet();
+  const significantImages = filterSignificantImages(root);
+  const significantImageSet = new Set(significantImages.map(({ img }) => img));
+  const acceptedImageRefs = new Set();
 
-  if (!root || !root.querySelectorAll) return candidates;
+  if (!root || !root.querySelectorAll) return { candidates, rejectedImages };
 
-  // ─── Step 1: Filter <img src> by size, ratio, naturalWidth, aria-hidden ───
-  const allImgs = Array.from(root.querySelectorAll('img[src]') || []);
-  const validImages = [];
-
-  // Inline size+ratio (no viewport check, no dominance yet — uses minContentSize equivalent to existing image gate)
-  const rootFontSize = (() => {
-    try {
-      const rootEl = document.documentElement;
-      const cs = rootEl && window.getComputedStyle ? window.getComputedStyle(rootEl) : null;
-      const px = parseFloat(String(cs?.fontSize || '16'));
-      return isFinite(px) && px > 0 ? px : 16;
-    } catch (e) {
-      return 16;
-    }
-  })();
-  const viewportBasedSize = Math.max(0, Number(window?.innerWidth || 0) * 0.03);
-  // === PHASE20_HOTFIX_ROOTFONT_CAP ===
-  // Cap rootFontSize at 16 (web standard) when computing the min content size.
-  // Some pages (e.g., Temu mobile) set <html style="font-size: 100px"> as a
-  // viewport-scaling trick, which inflates `rootFontSize * 2` to 200 and
-  // wrongly rejects legitimate 184×184 product images. The cap preserves the
-  // original intent (text-sized element filter) for standard sites while
-  // preventing inflation on viewport-scaled pages.
-  const cappedRootFontSize = Math.min(rootFontSize, 16);
-  const minContentSize = Math.max(cappedRootFontSize * 2, 32, viewportBasedSize);
-  // === END PHASE20_HOTFIX_ROOTFONT_CAP ===
-
-  for (const img of allImgs) {
-    // === PHASE20_HOTFIX_ARIA_HIDDEN_LARGE ===
-    // aria-hidden gate with size bypass: aria-hidden="true" images are
-    // typically decoration (icons, badges) and rejected. However, some sites
-    // (e.g., Temu's multi-image slider) mark large product images as
-    // aria-hidden="true" to avoid duplicate alt-text in the accessibility tree.
-    // Bypass the gate when the image is visually large (≥ 100×100), keeping
-    // the decoration-rejection intent for small images.
-    if (img.getAttribute?.('aria-hidden') === 'true') {
-      const probeRect = img.getBoundingClientRect?.();
-      const visuallyLarge = probeRect && probeRect.width >= 100 && probeRect.height >= 100;
-      if (!visuallyLarge) continue;
-    }
-    // === END PHASE20_HOTFIX_ARIA_HIDDEN_LARGE ===
-    const naturalW = Number(img.naturalWidth || 0);
-    if (naturalW > 0 && naturalW < 20) continue; // tracker filter (allow 0 for not-yet-loaded; 19j.3 fallback handles via natural)
-
-    const rect = getEffectiveImageRectForImageGate(img);
-    if (!rect) continue;
-    const w = Math.max(0, Number(rect.width || 0));
-    const h = Math.max(0, Number(rect.height || 0));
-    if (w < minContentSize || h < minContentSize) continue;
-    const ratio = h > 0 ? w / h : Number.POSITIVE_INFINITY;
-    if (ratio < 0.2 || ratio > 5.0) continue;
-
-    validImages.push({ img, rect });
-  }
+  // ─── Step 1: Shared significant-image pool ───
+  // Phase 21 unifies D and E over the same image filter. This function
+  // consumes the shared pool and decides which images pass D's card
+  // conditions; images not accepted by any successful D card become Type E.
 
   // ─── Step 2: Bottom-up walk per image ───
-  for (const { img } of validImages) {
+  for (const { img } of significantImages) {
     if (processedImages.has(img)) continue;
 
     // Build pathSig starting at img, prepending parent each step
@@ -1437,6 +1459,18 @@ async function detectTypeDItemMaps(root = document) {
     const itemMapSignature = `${identitySignature}::F:${structureSignature}::E:D`;
 
     for (const card of filteredCards) {
+      try {
+        if (significantImageSet.has(card)) acceptedImageRefs.add(card);
+        const innerImgs = card.querySelectorAll?.('img[src]') || [];
+        for (const innerImg of innerImgs) {
+          if (significantImageSet.has(innerImg)) acceptedImageRefs.add(innerImg);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    for (const card of filteredCards) {
       candidates.push({
         key: itemMapSignature,
         signature: itemMapSignature,
@@ -1453,92 +1487,26 @@ async function detectTypeDItemMaps(root = document) {
     }
   }
 
-  return candidates;
+  rejectedImages.push(
+    ...significantImages.filter(({ img }) => !acceptedImageRefs.has(img))
+  );
+
+  return { candidates, rejectedImages };
 }
 // === TYPED_REDESIGN_PHASE20 END ===
 
 // === TYPED_REDESIGN_PHASE20_TYPEE ===
 /**
- * Type E (fallback image) ItemMap detection.
- *
- * Goal: catch individual images that Type D's grid-card algorithm misses
- * (solo product images on detail pages, hero/banner images, single article
- * images, etc.) so users can clip them.
- *
- * Constraints:
- *   - Each image is its own entry (MIN_GROUP_SIZE = 1).
- *   - No anchor required: <img> alone or <a><img></a> both accepted.
- *   - No dominance check (image is the card).
- *   - No max-size guard (large banners allowed).
- *   - Floor at 100x100 (rejects decoration / icons).
- *   - Standard ratio bounds (0.2 <= w/h <= 5.0).
- *   - aria-hidden gate with the same 100x100 large-bypass as Type D.
- *   - Nav guard: reject if any ancestor is HEADER/FOOTER/NAV or has role
- *     banner/contentinfo/navigation.
- *   - Deduplication: skip images already in processedImages (Type D).
- *
- * cardElement: <a> if `img.closest('a[href]')` exists within 5 ancestor
- * steps; otherwise <img> itself.
- *
- * Caller is responsible for additional dedup against B/C/A elements
- * (handled in detectItemMaps via seenAncestors / contains check).
+ * Type E (fallback image) candidates derived from the shared significant-image
+ * pool. Any significant image that fails Type D's card conditions becomes a
+ * Type E candidate. Candidate element is the <img> itself.
  */
-async function detectTypeEItemMaps(root = document, processedImages = new WeakSet()) {
+async function detectTypeEItemMaps(rejectedImages = []) {
   const candidates = [];
-  if (!root || !root.querySelectorAll) return candidates;
+  const rejected = Array.isArray(rejectedImages) ? rejectedImages : [];
 
-  const TYPE_E_MIN_SIZE = 100;
-  const TYPE_E_MAX_ANCHOR_WALK = 5;
-
-  const allImgs = Array.from(root.querySelectorAll('img[src]') || []);
-
-  for (const img of allImgs) {
-    if (processedImages.has(img)) continue;
-
-    // aria-hidden gate (same large-bypass rule as Type D Step 1)
-    if (img.getAttribute?.('aria-hidden') === 'true') {
-      const probeRect = img.getBoundingClientRect?.();
-      const visuallyLarge = probeRect && probeRect.width >= 100 && probeRect.height >= 100;
-      if (!visuallyLarge) continue;
-    }
-
-    const naturalW = Number(img.naturalWidth || 0);
-    if (naturalW > 0 && naturalW < 20) continue;
-
-    const rect = getEffectiveImageRectForImageGate(img);
-    if (!rect) continue;
-    const w = Math.max(0, Number(rect.width || 0));
-    const h = Math.max(0, Number(rect.height || 0));
-    if (w < TYPE_E_MIN_SIZE || h < TYPE_E_MIN_SIZE) continue;
-
-    const ratio = h > 0 ? w / h : Number.POSITIVE_INFINITY;
-    if (ratio < 0.2 || ratio > 5.0) continue;
-
-    // Nav guard: walk up checking every ancestor for nav-like context
-    let navAncestor = false;
-    let cur = img.parentElement;
-    while (cur && cur !== document.body) {
-      const tag = String(cur.tagName || '').toUpperCase();
-      if (TYPED_NAV_TAGS.has(tag)) { navAncestor = true; break; }
-      const role = String(cur.getAttribute?.('role') || '').toLowerCase().trim();
-      if (TYPED_NAV_ROLES.has(role)) { navAncestor = true; break; }
-      cur = cur.parentElement;
-    }
-    if (navAncestor) continue;
-
-    // Anchor lookup: walk up to TYPE_E_MAX_ANCHOR_WALK steps
-    let anchor = null;
-    let walker = img.parentElement;
-    for (let step = 0; step < TYPE_E_MAX_ANCHOR_WALK && walker; step++) {
-      if (walker.tagName === 'A' && walker.hasAttribute?.('href')) {
-        anchor = walker;
-        break;
-      }
-      walker = walker.parentElement;
-    }
-
-    const cardElement = anchor || img;
-
+  for (const { img } of rejected) {
+    if (!img || String(img?.tagName || '').toUpperCase() !== 'IMG') continue;
     candidates.push({
       key: `typeE::${candidates.length}`,
       signature: `typeE::${candidates.length}`,
@@ -1546,14 +1514,12 @@ async function detectTypeEItemMaps(root = document, processedImages = new WeakSe
       identitySignature: signatureOfNode(img),
       structureSignature: 'typeE',
       evidenceType: EVIDENCE_TYPE_E,
-      element: cardElement,
+      element: img,
       similarityType: 'typeE-fallback-image',
       classPattern: '',
       attrKey: '',
       attrValue: '',
     });
-
-    processedImages.add(img);
   }
 
   return candidates;
@@ -1603,7 +1569,7 @@ export async function detectItemMaps(root = document) {
     // Run new image-first Type D detection before the existing loop.
     // Existing main loop will skip elements already classified by the new system,
     // so old D path doesn't compete or duplicate.
-    const typeDCandidates = await detectTypeDItemMaps(root);
+    const { candidates: typeDCandidates, rejectedImages } = await detectTypeDItemMaps(root);
     candidates.push(...typeDCandidates);
     const typeDElementSet = new Set();
     for (const c of typeDCandidates) {
@@ -1953,31 +1919,29 @@ export async function detectItemMaps(root = document) {
     const allItems = [...finalFiltered];
 
     // === TYPED_REDESIGN_PHASE20_TYPEE — Type E fallback image merge ===
-    // Type E catches individual images not part of any Type D/B/C entry.
-    // Run last so all higher-priority detectors had their chance.
+    // Type E now consumes the same significant-image pool as Type D and
+    // receives only the images that failed D's card conditions. D/E dedup is
+    // therefore deterministic and no longer needs containment checks.
     //
-    // Dedup: pass processedImages from Type D detection so the same images
-    // aren't re-examined (note: detectTypeDItemMaps internally manages its
-    // own WeakSet; we run Type E with a fresh one but check via element
-    // ancestors for B/C/D coverage below).
-    const typeEItems = await detectTypeEItemMaps(root, new WeakSet());
-    const seenAncestors = new Set(allItems.map((x) => x.element));
+    // Preserve the prior Type B overlap guard: if a Type B element contains
+    // this Type E image (or vice versa), skip the Type E candidate.
+    const typeEItems = await detectTypeEItemMaps(rejectedImages);
+    const seenBAncestors = new Set(
+      allItems
+        .filter((x) => x?.evidenceType === EVIDENCE_TYPE_INTERACTION && x?.element)
+        .map((x) => x.element)
+    );
     for (const item of typeEItems) {
       const el = item?.element;
-      if (!el || seenAncestors.has(el)) continue;
-      // Element-level dedup: if any already-classified element contains or
-      // is contained by this Type E element, skip. This prevents Type E from
-      // re-claiming images inside Type D cards or images that are themselves
-      // wrappers for Type B posts.
+      if (!el || seenBAncestors.has(el)) continue;
       let conflicts = false;
-      for (const seenEl of seenAncestors) {
+      for (const seenEl of seenBAncestors) {
         if (seenEl === el) { conflicts = true; break; }
         if (typeof seenEl.contains === 'function' && seenEl.contains(el)) { conflicts = true; break; }
         if (typeof el.contains === 'function' && el.contains(seenEl)) { conflicts = true; break; }
       }
       if (conflicts) continue;
       allItems.push(item);
-      seenAncestors.add(el);
     }
     // === END TYPED_REDESIGN_PHASE20_TYPEE ===
 
