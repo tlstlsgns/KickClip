@@ -632,6 +632,55 @@ function isInsideNavLikeAncestor(el) {
 }
 
 /**
+ * Phase 23: Visibility check used by Type D detection (image pool,
+ * sibling matching, per-card validation).
+ *
+ * Returns true if the element is visually hidden either by its own
+ * styles/attributes OR by any ancestor up to depth 10.
+ */
+function isVisuallyHidden(el) {
+  if (!el || el.nodeType !== 1) return true;
+
+  // Self checks.
+  try {
+    if (el.getAttribute?.('aria-hidden') === 'true') return true;
+
+    const cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (cs) {
+      if (cs.display === 'none') return true;
+      if (cs.visibility === 'hidden') return true;
+      const opacity = parseFloat(cs.opacity);
+      if (isFinite(opacity) && opacity < 0.01) return true;
+    }
+
+    const r = el.getBoundingClientRect?.();
+    if (r && (r.width <= 0 || r.height <= 0)) return true;
+  } catch (e) {
+    // If any self check throws, fall through to ancestor checks.
+  }
+
+  // Ancestor checks (depth-limited).
+  try {
+    let ancestor = el.parentElement;
+    let depth = 0;
+    while (ancestor && ancestor !== document.body && depth < 10) {
+      if (ancestor.getAttribute?.('aria-hidden') === 'true') return true;
+      const acs = window.getComputedStyle ? window.getComputedStyle(ancestor) : null;
+      if (acs) {
+        if (acs.display === 'none') return true;
+        if (acs.visibility === 'hidden') return true;
+      }
+      ancestor = ancestor.parentElement;
+      depth += 1;
+    }
+  } catch (e) {
+    // Defensive: ancestor walk should never throw, but stay quiet.
+  }
+
+  return false;
+}
+
+/**
  * Phase 21: shared significant-image pool for Type D and Type E.
  * Threshold is viewport-independent: Math.max(80, cappedRootFontSize * 2),
  * preserving the existing root-font cap at 16.
@@ -676,6 +725,20 @@ function filterSignificantImages(root = document) {
     if (ratio < 0.2 || ratio > 5.0) continue;
 
     if (isInsideNavLikeAncestor(img)) continue;
+
+    // === PHASE23_VISIBILITY_FILTER ===
+    // Even if the image's own size/ratio/nav-guard pass, exclude it if
+    // it (or any ancestor up to depth 10) is visually hidden. This
+    // catches images inside carousel slides translated off-screen,
+    // collapsed accordions, etc.
+    //
+    // The earlier aria-hidden bypass for visually large images is
+    // preserved above. Images that survived that bypass (large +
+    // aria-hidden self) reach this check; isVisuallyHidden will still
+    // catch them via ANCESTOR aria-hidden, which is the intended
+    // ItemMap behavior.
+    if (isVisuallyHidden(img)) continue;
+    // === END PHASE23_VISIBILITY_FILTER ===
 
     significantImages.push({ img, rect });
   }
@@ -1293,7 +1356,8 @@ async function detectTypeDItemMaps(root = document) {
         continue;
       }
 
-      const sibParents = Array.from(grandparent.children).filter((s) => s !== parent && s.nodeType === 1);
+      const sibParents = Array.from(grandparent.children)
+        .filter((s) => s !== parent && s.nodeType === 1 && !isVisuallyHidden(s));
       if (sibParents.length === 0) {
         cur = parent;
         continue;
@@ -1343,6 +1407,11 @@ async function detectTypeDItemMaps(root = document) {
     // ─── Step 3: Per-card dominance + anchor verification ───
     const validCards = [];
     for (const card of candidateCards) {
+      // Phase 23: Skip cards that are visually hidden (themselves or by
+      // ancestor). The sibParents filter normally catches these earlier,
+      // but cardWrapper itself is added to candidateCards directly and
+      // skips that filter, so re-check here.
+      if (isVisuallyHidden(card)) continue;
       const cardRect = card.getBoundingClientRect?.();
       if (!cardRect || cardRect.width <= 0 || cardRect.height <= 0) continue;
 
