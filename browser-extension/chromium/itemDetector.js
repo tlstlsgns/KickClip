@@ -50,6 +50,11 @@ const STABLE_SIG_ATTR_KEYS = new Set([
 ]);
 
 let clusterLookup = new Set();
+// Phase 27a: image-keyed lookup for Type B / Type D / Type E
+// candidates. Type B and Type D candidates populate this from
+// their `seedImages` field; Type E candidates populate it from
+// `element` (which is always an <img>).
+let imageToItem = new Map();
 
 function normalizeText(s) {
   return String(s || '').trim().replace(/\s+/g, ' ');
@@ -766,6 +771,40 @@ function isInsideMapContainer(el) {
 }
 
 /**
+ * Phase 27a: Returns the set of dominant <img> elements inside a
+ * container element. An <img> is dominant when its effective rect
+ * satisfies `isImageDominantInCoreItem(imgRect, containerRect)`.
+ * Returns an empty Set if the container has no dominant image.
+ *
+ * Used by:
+ *   - Type B detection, to attach `seedImages` and to filter out
+ *     Type B candidates that have no dominant image (Phase 27
+ *     strict integration policy)
+ *   - Type D detection, indirectly (the per-card loop still
+ *     iterates inline, but Phase 27a expands its iteration to
+ *     collect every dominant img rather than just the first)
+ */
+function findDominantImagesInElement(container) {
+  const out = new Set();
+  try {
+    if (!container || container.nodeType !== 1) return out;
+    const rect = container.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return out;
+    const innerImgs = container.querySelectorAll?.('img[src]') || [];
+    for (const innerImg of innerImgs) {
+      const innerRect = getEffectiveImageRectForImageGate(innerImg);
+      if (!innerRect) continue;
+      if (isImageDominantInCoreItem(innerRect, rect)) {
+        out.add(innerImg);
+      }
+    }
+  } catch (e) {
+    // defensive
+  }
+  return out;
+}
+
+/**
  * Phase 21: shared significant-image pool for Type D and Type E.
  * Threshold is viewport-independent: Math.max(80, cappedRootFontSize * 2),
  * preserving the existing root-font cap at 16.
@@ -1301,6 +1340,10 @@ function detectFacebookFallback(root, existingElements = new Set()) {
       const identitySig = getElementSignature(unit) || 'DIV::A:fb_feedunit_fallback';
       const structureSig = getInternalStructure(unit, 3) || 'fb_fallback_structure';
       const signature = `FB_FALLBACK::${pagelet || 'unknown'}::${identitySig}::${structureSig}`;
+      // === PHASE27A_TYPE_B_STRICT (facebook fallback) ===
+      const seedImages = findDominantImagesInElement(unit);
+      if (!seedImages.size) continue;
+      // === END PHASE27A_TYPE_B_STRICT ===
       out.push({
         key: signature,
         signature,
@@ -1309,6 +1352,7 @@ function detectFacebookFallback(root, existingElements = new Set()) {
         structureSignature: structureSig,
         evidenceType: EVIDENCE_TYPE_INTERACTION,
         element: unit,
+        seedImages,
         similarityType: 'facebook-feedunit-fallback',
         classPattern: '',
         attrKey: 'data-pagelet',
@@ -1525,22 +1569,20 @@ async function detectTypeDItemMaps(root = document) {
       if (widthRatio > 0.4 || areaRatio > 0.25) continue;
       // === END PHASE20_HOTFIX_SIZE_GUARD ===
 
-      // dominance: at least one inner img must pass isImageDominantInCoreItem
-      let hasDominantImage = false;
+      // === PHASE27A_TYPE_D_DOMINANT_IMAGES ===
+      // Collect every <img> inside this card that passes
+      // isImageDominantInCoreItem. The `break` from the prior
+      // implementation is removed: Phase 27 hover dispatch uses
+      // every dominant image as an activation key, so we must
+      // record all of them.
+      let cardDominantImgs;
       try {
-        const innerImgs = card.querySelectorAll?.('img[src]') || [];
-        for (const innerImg of innerImgs) {
-          const innerRect = getEffectiveImageRectForImageGate(innerImg);
-          if (!innerRect) continue;
-          if (isImageDominantInCoreItem(innerRect, cardRect)) {
-            hasDominantImage = true;
-            break;
-          }
-        }
+        cardDominantImgs = findDominantImagesInElement(card);
       } catch (e) {
-        // ignore
+        cardDominantImgs = new Set();
       }
-      if (!hasDominantImage) continue;
+      if (!cardDominantImgs.size) continue;
+      // === END PHASE27A_TYPE_D_DOMINANT_IMAGES ===
 
       // === PHASE20_HOTFIX_ANCHOR_SELF ===
       // anchor: accept either (a) card element itself is <a href>, or
@@ -1554,7 +1596,7 @@ async function detectTypeDItemMaps(root = document) {
       if (!cardIsAnchor && !hasDescendantAnchor) continue;
       // === END PHASE20_HOTFIX_ANCHOR_SELF ===
 
-      validCards.push(card);
+      validCards.push({ card, dominantImgs: cardDominantImgs });
     }
 
     if (validCards.length < TYPED_MIN_GROUP_SIZE) continue;
@@ -1576,7 +1618,7 @@ async function detectTypeDItemMaps(root = document) {
       if (n % 2 === 1) return sorted[(n - 1) / 2];
       return (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
     };
-    const cardRects = validCards.map((c) => c.getBoundingClientRect());
+    const cardRects = validCards.map((x) => x.card.getBoundingClientRect());
     const widths = cardRects.map((r) => r.width);
     const heights = cardRects.map((r) => r.height);
     const widthMedian = computeMedian(widths);
@@ -1611,7 +1653,7 @@ async function detectTypeDItemMaps(root = document) {
     // Pinterest's organic right-rail (uniform width across cards, varying
     // heights for masonry) passes via widthSpread; Naver's image search
     // (uniform width and height) passes both axes.
-    if (!validateVisualLayout(filteredCards)) continue;
+    if (!validateVisualLayout(filteredCards.map((x) => x.card))) continue;
     // === END PHASE20_HOTFIX_LAYOUT_CONSISTENCY ===
 
     // ─── Build candidate entries (compatible with detectItemMaps schema) ───
@@ -1620,7 +1662,7 @@ async function detectTypeDItemMaps(root = document) {
     const structureSignature = pathSig.join('::');
     const itemMapSignature = `${identitySignature}::F:${structureSignature}::E:D`;
 
-    for (const card of filteredCards) {
+    for (const { card } of filteredCards) {
       try {
         if (significantImageSet.has(card)) acceptedImageRefs.add(card);
         const innerImgs = card.querySelectorAll?.('img[src]') || [];
@@ -1635,7 +1677,7 @@ async function detectTypeDItemMaps(root = document) {
       }
     }
 
-    for (const card of filteredCards) {
+    for (const { card, dominantImgs } of filteredCards) {
       candidates.push({
         key: itemMapSignature,
         signature: itemMapSignature,
@@ -1644,6 +1686,9 @@ async function detectTypeDItemMaps(root = document) {
         structureSignature,
         evidenceType: EVIDENCE_TYPE_IMAGE_ANCHOR,
         element: card,
+        // === PHASE27A_SEED_IMAGES ===
+        seedImages: dominantImgs,
+        // === END PHASE27A_SEED_IMAGES ===
         similarityType: 'typeD-image-first',
         classPattern: '',
         attrKey: '',
@@ -1886,6 +1931,18 @@ export async function detectItemMaps(root = document) {
         if (!(await isMeaningfulItemMap(passed, evidenceType))) continue;
         for (const el of passed) {
           const parts = identitySig.split('::');
+          // === PHASE27A_TYPE_B_STRICT ===
+          // Phase 27 B-β-1: Type B activation is now image-keyed.
+          // A Type B candidate must contain at least one dominant
+          // <img>. Candidates with no dominant image (e.g.,
+          // text-only posts) are excluded so they cannot be
+          // activated via image-hover.
+          let seedImages = new Set();
+          if (evidenceType === EVIDENCE_TYPE_INTERACTION) {
+            seedImages = findDominantImagesInElement(el);
+            if (!seedImages.size) continue;
+          }
+          // === END PHASE27A_TYPE_B_STRICT ===
           candidates.push({
             key: itemMapSignature,
             signature: itemMapSignature,
@@ -1894,6 +1951,9 @@ export async function detectItemMaps(root = document) {
             structureSignature: structureSig,
             evidenceType,
             element: el,
+            // === PHASE27A_SEED_IMAGES ===
+            seedImages,
+            // === END PHASE27A_SEED_IMAGES ===
             similarityType: 'composite',
             classPattern: parts[1] || '',
             attrKey: parts[0] || '',
@@ -2018,6 +2078,10 @@ export async function detectItemMaps(root = document) {
             if (Math.abs(candShareDepth - seedShareDepth) > 2) continue;
 
             const candidateIdentity = getElementSignature(cand) || seed.identitySignature || '';
+            // === PHASE27A_TYPE_B_STRICT (sibling recovery) ===
+            const seedImages = findDominantImagesInElement(cand);
+            if (!seedImages.size) continue;
+            // === END PHASE27A_TYPE_B_STRICT ===
             out.push({
               key: `${seed.key || seed.signature || ''}::BXR`,
               signature: `${seed.signature || seed.key || ''}::BXR`,
@@ -2026,6 +2090,7 @@ export async function detectItemMaps(root = document) {
               structureSignature: getInternalStructure(cand, 3) || seed.structureSignature || '',
               evidenceType: EVIDENCE_TYPE_INTERACTION,
               element: cand,
+              seedImages,
               similarityType: customTagException
                 ? 'comprehensive-sibling-recovery-custom-tag'
                 : 'comprehensive-sibling-recovery-type-b',
@@ -2112,6 +2177,9 @@ export async function detectItemMaps(root = document) {
 
     if (root === document) {
       clusterLookup = new Set(allItems.map((x) => x.element));
+      // === PHASE27A_IMAGE_TO_ITEM ===
+      imageToItem = buildImageToItem(allItems);
+      // === END PHASE27A_IMAGE_TO_ITEM ===
     }
 
     const platform = getCurrentPlatform();
@@ -2191,12 +2259,75 @@ export function getItemMapFingerprint(items) {
   }
 }
 
+/**
+ * Phase 27a: builds the <img> → candidate lookup map.
+ *
+ * Type B and Type D candidates contribute one entry per element
+ * in their `seedImages` Set. Type E candidates contribute one
+ * entry keyed by their `element` (which is always an <img>).
+ *
+ * If the same <img> appears in multiple candidates (should not
+ * happen given Phase 22 dedup of accepted card inner imgs, plus
+ * the Type B/E overlap pruning at allItems assembly), the first
+ * candidate seen wins. We don't expect this collision in
+ * practice; the first-wins policy is purely defensive.
+ */
+function buildImageToItem(items) {
+  const map = new Map();
+  try {
+    if (!Array.isArray(items)) return map;
+    for (const item of items) {
+      if (!item) continue;
+      if (item.evidenceType === EVIDENCE_TYPE_E) {
+        const img = item.element;
+        if (img && String(img.tagName || '').toUpperCase() === 'IMG' && !map.has(img)) {
+          map.set(img, item);
+        }
+      } else if (
+        item.evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR ||
+        item.evidenceType === EVIDENCE_TYPE_INTERACTION
+      ) {
+        const seeds = item.seedImages instanceof Set ? item.seedImages : null;
+        if (seeds) {
+          for (const img of seeds) {
+            if (img && !map.has(img)) {
+              map.set(img, item);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // defensive
+  }
+  return map;
+}
+
 export function ensureClusterCacheFromState() {
   try {
     const list = Array.isArray(state.itemMap) ? state.itemMap : [];
     clusterLookup = new Set(list.map((x) => x.element).filter(Boolean));
+    // === PHASE27A_IMAGE_TO_ITEM ===
+    imageToItem = buildImageToItem(list);
+    // === END PHASE27A_IMAGE_TO_ITEM ===
   } catch (e) {
     clusterLookup = new Set();
+    imageToItem = new Map();
+  }
+}
+
+/**
+ * Phase 27a: Returns the candidate associated with a given <img>
+ * via the seedImages lookup, or null. This is the image-keyed
+ * companion to `findClusterContainerFromTarget`. Phase 27b will
+ * use it as the Type B / Type D / Type E hover lookup.
+ */
+export function findItemByImage(img) {
+  try {
+    if (!img || String(img.tagName || '').toUpperCase() !== 'IMG') return null;
+    return imageToItem.get(img) || null;
+  } catch (e) {
+    return null;
   }
 }
 
