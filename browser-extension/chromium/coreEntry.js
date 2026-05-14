@@ -54,6 +54,7 @@ let _shortcutDisplay = '';
 
 let scanTimer = 0;
 let lastFingerprint = '';
+let lastRenderedElementSet = null;
 let _retryScanTimer = 0;    // setTimeout handle for pending retry scan
 let _retryScanCount  = 0;   // number of retries attempted for current navigation
 let _forceFullScanOnMutation = false; // true after navigation: next MutationObserver trigger uses full document scan
@@ -900,8 +901,33 @@ function schedulePreScan(scope = document, force = false, trigger = 'unknown') {
           .join('|')
       : '';
     const fp = `${getItemMapFingerprint(candidates)}::${attrAwarePart}`;
-    if (!force && fp === lastFingerprint) return;
+
+    // === PHASE_OUTLINE_FP_ELEMENT_GATE ===
+    // fp alone is insufficient: when the page swaps <img> nodes via lazy-load/
+    // hydration but the new candidate set produces an identical fingerprint
+    // (same length, same sorted signature keys), the renderer was skipped and
+    // outlines were never re-applied to the new nodes. Require element identity
+    // to match as well; otherwise re-render so outlines follow the live DOM.
+    const currentElementSet = new Set();
+    if (Array.isArray(candidates)) {
+      for (const c of candidates) {
+        if (c?.element) currentElementSet.add(c.element);
+      }
+    }
+    const sameElements =
+      lastRenderedElementSet !== null &&
+      lastRenderedElementSet.size === currentElementSet.size &&
+      (() => {
+        for (const el of currentElementSet) {
+          if (!lastRenderedElementSet.has(el)) return false;
+        }
+        return true;
+      })();
+    if (!force && fp === lastFingerprint && sameElements) return;
+    // === END PHASE_OUTLINE_FP_ELEMENT_GATE ===
+
     lastFingerprint = fp;
+    lastRenderedElementSet = currentElementSet;
     renderItemMapCandidates(candidates);
 
     // Retry logic: when a forced full-document scan finds no candidates,
@@ -2120,6 +2146,35 @@ function mountWindowListeners() {
   window.__kcWindowListenersMounted = true;
 
   window.addEventListener('load', () => schedulePreScan(document, false, 'window-load'), { passive: true });
+  // === PHASE_IMG_LOAD_TRIGGER ===
+  // Some sites (e.g. Behance) complete lazy-load by populating an
+  // <img>'s underlying bytes without mutating its `src` attribute and
+  // without inserting/removing any DOM node KickClip's MutationObserver
+  // observes. The class swap on the parent <a> is filtered out by the
+  // observer's attributeFilter: ['src']; the placeholder removal is a
+  // removedNodes-only mutation the callback also does not check. The
+  // net effect: no preScan trigger fires when lazy-load actually
+  // completes, and detection does not catch up until an unrelated
+  // event (resize, scroll-driven hover, popup) perturbs state.
+  //
+  // The <img>.load event fires reliably when any image's bytes finish
+  // decoding, including <picture><source srcset> swaps that leave
+  // <img src> unchanged. We listen at the document level in capture
+  // phase because individual elements' `load` events do not bubble.
+  // schedulePreScan() is already debounced via scanTimer, so even a
+  // burst of simultaneous loads collapses to a single scan.
+  document.addEventListener(
+    'load',
+    (e) => {
+      const t = e?.target;
+      if (!t || t.nodeType !== 1) return;
+      if (String(t.tagName || '').toUpperCase() !== 'IMG') return;
+      schedulePreScan(document, false, 'img-load');
+    },
+    { passive: true, capture: true }
+  );
+  // === END PHASE_IMG_LOAD_TRIGGER ===
+
   window.addEventListener('scroll', async () => {
     const active = state.activeCoreItem;
 
@@ -2248,6 +2303,7 @@ function mountWindowListeners() {
     }
     _retryScanCount = 0;
     lastFingerprint = '';
+    lastRenderedElementSet = null;
     _forceFullScanOnMutation = true;
     schedulePreScan(document, true, 'spa-navigation');
   }

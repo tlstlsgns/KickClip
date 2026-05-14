@@ -805,7 +805,43 @@ function isVisuallyHidden(el) {
     }
 
     const r = el.getBoundingClientRect?.();
-    if (r && (r.width <= 0 || r.height <= 0)) return true;
+    if (r && (r.width <= 0 || r.height <= 0)) {
+      // === PHASE_LAZY_LOAD_ZERO_RECT_FALLBACK ===
+      // Lazy-load-aware fallback: when an <img> element has its own
+      // zero-rect because the underlying image bytes have not yet been
+      // decoded (naturalWidth=0, complete=false), but its parent holds
+      // the layout space via a placeholder sibling (e.g. Behance's
+      // <a><img><div.ImageElement-placeholder-Cz6></a> pattern), the
+      // image is structurally present and visually positioned — it is
+      // not "hidden", just not yet painted. Treat it as visible so the
+      // significant-image pipeline does not reject it at Gate G.
+      //
+      // This mirrors getEffectiveImageRectForImageGate's parent-fallback
+      // (Phase 19j.3) which already returns the parent rect for the
+      // same lazy-load class of state. Without this mirror, Gate C and
+      // Gate G return contradictory verdicts on identical inputs.
+      //
+      // Restrictions:
+      //  - Only relaxes for <img> elements. Other tags keep the strict
+      //    zero-rect rule.
+      //  - Parent must exist and have a non-zero rect.
+      //  - All other hidden indicators (aria-hidden, display:none,
+      //    visibility:hidden, opacity<0.01) above this block still
+      //    apply; this block only relaxes the self:zero-rect indicator.
+      //  - Ancestor visibility checks below this block continue to run.
+      const tag = String(el.tagName || '').toUpperCase();
+      if (tag === 'IMG' && el.parentElement) {
+        const pr = el.parentElement.getBoundingClientRect?.();
+        if (pr && pr.width > 0 && pr.height > 0) {
+          // Parent has layout — fall through to ancestor checks.
+        } else {
+          return true;
+        }
+      } else {
+        return true;
+      }
+      // === END PHASE_LAZY_LOAD_ZERO_RECT_FALLBACK ===
+    }
   } catch (e) {
     // If any self check throws, fall through to ancestor checks.
   }
