@@ -30,6 +30,7 @@ import {
   hideMetadataTooltip,
   detectItemCategory,
   triggerShutterEffect,
+  resolveAnchorUrl,
 } from './coreEngine.js';
 import {
   extractYouTubeShortcodeFromUrl,
@@ -694,8 +695,13 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   }
 
   // === PHASE27F_TYPE_E_OVERRIDES ===
-  // Phase 27b: Type E has no descendant anchor, so force
-  //   meta.activeHoverUrl = window.location.href for the clip path.
+  // Phase 27b (historical): Type E was treated as having no descendant
+  //   anchor, so meta.activeHoverUrl was forced to window.location.href.
+  //   PHASE_TYPE_E_ANCHOR_URL below now upgrades this: when the Type E
+  //   <img> has a wrapping <a href> with a meaningful navigation URL
+  //   (per resolveAnchorUrl), use that URL instead. window.location.href
+  //   remains the fallback for anchor-less Type E (the original Phase 27b
+  //   case).
   // Phase 27f: extractMetadataForCoreItem returns null for an
   //   <img>-only coreItem (no activeHoverUrl inside the <img>),
   //   so meta.image is typically absent. With the new <img>
@@ -713,7 +719,29 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         // defensive
       }
     }
-    meta = { ...meta, activeHoverUrl: String(window.location.href || '') };
+    // === PHASE_TYPE_E_ANCHOR_URL ===
+    // Type E activeHoverUrl: prefer the image-wrapping <a href>'s resolved
+    // URL when one exists and resolveAnchorUrl qualifies it as a meaningful
+    // navigation URL. Fall back to window.location.href otherwise (no
+    // wrapping anchor, no href, or anchor's URL filtered out as empty /
+    // fragment / javascript: / internal redirect / same-document).
+    let typeEActiveUrl = '';
+    try {
+      const wrappingAnchor = coreItem?.closest?.('a[href]') || null;
+      if (wrappingAnchor) {
+        const resolved = resolveAnchorUrl(wrappingAnchor);
+        if (typeof resolved === 'string' && resolved.length > 0) {
+          typeEActiveUrl = resolved;
+        }
+      }
+    } catch (e) {
+      // defensive: closest can throw on disconnected nodes
+    }
+    if (!typeEActiveUrl) {
+      typeEActiveUrl = String(window.location.href || '');
+    }
+    meta = { ...meta, activeHoverUrl: typeEActiveUrl };
+    // === END PHASE_TYPE_E_ANCHOR_URL ===
   }
   // === END PHASE27F_TYPE_E_OVERRIDES ===
 
