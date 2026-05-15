@@ -542,7 +542,6 @@ function coreClear() {
   } else {
     clearCoreSelection();
   }
-  _lastMouseoverTarget = null;
 }
 
 /**
@@ -2200,24 +2199,21 @@ function mountWindowListeners() {
     const target = e?.target && e.target.nodeType === 1 ? e.target : null;
     if (target === _lastMouseoverTarget) return;
     _lastMouseoverTarget = target;
-    // On YouTube, ignore mouseover events whose target is inside #video-preview —
-    // the preview overlay renders on top of thumbnails and intercepts mouse events,
-    // causing CoreHighlight to be incorrectly dismissed.
-    if (
-      target?.closest?.('#video-preview') &&
-      /^https:\/\/www\.youtube\.com(\/|$)/.test(String(window.location.href || ''))
-    ) return;
-    // Preserve active state when moving within the same CoreItem.
+    // YouTube #video-preview hover preview is a transient overlay that the
+    // dispatcher should ignore — it appears and disappears too fast for
+    // our purposes.
+    if (target && target.closest?.('#video-preview, ytd-miniplayer')) return;
+    // Already on the active CoreItem? Nothing to do.
     const active = state.activeCoreItem;
-    if (active && target && active.contains(target)) return;
+    if (active && typeof active.contains === 'function' && active.contains(target)) {
+      return;
+    }
     // === PHASE27D_RELAXED_DISPATCH ===
-    // Phase 27d: relaxed mouseover dispatch. Phase 27c rejected
-    // any non-img target outright. With Phase 27d's hover-
-    // companion registration, non-img elements that are visual
-    // companions of a seed <img> resolve to a candidate via
-    // findItemByImage(). Therefore dispatch any element node
-    // here; updateCoreSelectionFromTarget() will clear when no
-    // candidate is found.
+    // Hovering off any candidate clears the active CoreItem rather than
+    // letting it linger. The previous behavior left the highlight on
+    // stale items when the pointer slid into an unrelated region of the
+    // page; that surprised users and conflicted with the cluster cache
+    // invariant.
     if (!target) {
       if (active) coreClear();
       return;

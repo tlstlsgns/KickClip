@@ -55,6 +55,16 @@ let clusterLookup = new Set();
 // their `seedImages` field; Type E candidates populate it from
 // `element` (which is always an <img>).
 let imageToItem = new Map();
+// === PHASE_CLUSTER_CACHE_REF ===
+// Reference-equality cache key for ensureClusterCacheFromState. When
+// state.itemMap is replaced (the only mutation pattern in the codebase —
+// see itemDetector.js:2744 and coreEntry.js:905), this reference changes
+// and the rebuild fires. While state.itemMap holds the same array
+// reference, repeated ensureClusterCacheFromState() calls (one per
+// mousemove dispatch) short-circuit. Cleared on rebuild failure so the
+// next call retries.
+let _lastClusterCacheRef = null;
+// === END PHASE_CLUSTER_CACHE_REF ===
 
 function normalizeText(s) {
   return String(s || '').trim().replace(/\s+/g, ' ');
@@ -2631,6 +2641,80 @@ function buildImageToItem(items) {
         if (img && String(img.tagName || '').toUpperCase() === 'IMG' && !map.has(img)) {
           map.set(img, item);
         }
+        // === PHASE_TYPE_E_ANCHOR_REGISTER ===
+        // For each Type E item, also register the <img>'s closest
+        // <a href> ancestor as an imageToItem key. Mirrors the Type D
+        // registration above so descendants of the link (overlay
+        // <div>s, caption icons, etc.) resolve to the Type E item via
+        // findItemByImage's closest-anchor fallback. No-op when the
+        // <img> is not inside an anchor (single-image page with no
+        // link), which is fine — the direct registration of
+        // item.element above still covers the image itself.
+        //
+        // Size-equivalence gate: Type E represents a standalone image,
+        // not a card. When the <a> wraps significantly more than the
+        // image (caption, metadata row, social buttons), registering
+        // it under the anchor key would cause descendants far from the
+        // image to activate Type E — a false positive. Only register
+        // the anchor when its bounding rect approximately equals the
+        // image's rect (within rectsApproxEqual's 4px tolerance per
+        // axis). A wider anchor fails the gate; the image's direct
+        // registration above still keeps the image itself dispatchable.
+        if (item.element && typeof item.element.closest === 'function') {
+          try {
+            const anchor = item.element.closest('a[href]');
+            if (anchor && anchor !== item.element && !map.has(anchor)) {
+              const imgRect = item.element.getBoundingClientRect?.();
+              const anchorRect = anchor.getBoundingClientRect?.();
+              if (rectsApproxEqual(imgRect, anchorRect)) {
+                // Strict gate: anchor's box ≈ image's box.
+                // Covers the typical thumbnail-link pattern where
+                // <a> wraps only the <img>.
+                map.set(anchor, item);
+              } else if (imgRect && anchorRect) {
+                // Relaxed gate (figure-only): the strict gate rejects
+                // ArchDaily's pattern where <a> has width=100% height=100%
+                // styles but the rendered <a> box ends up shorter than
+                // the <img> (aspect-ratio / min-height on the image).
+                // The HTML semantic signal that "this is an image unit"
+                // is the <figure> ancestor — author-tagged self-contained
+                // image+caption block. Relax the size gate iff:
+                //   (a) <img> and the (already-resolved) enclosing <a>
+                //       both sit inside the same <figure>; AND
+                //   (b) <a>'s rect is approximately contained within
+                //       <img>'s rect on all four edges (4px tolerance).
+                // The anchor under consideration is always
+                // img.closest('a[href]') — the <a> that wraps the image,
+                // not some other <a> elsewhere in <figure> (e.g. inside
+                // <figcaption>).
+                const figure = item.element.closest('figure');
+                const sharedFigure =
+                  figure && typeof figure.contains === 'function' && figure.contains(anchor);
+                if (sharedFigure) {
+                  const w = Number(imgRect.width) || 0;
+                  const h = Number(imgRect.height) || 0;
+                  const aw = Number(anchorRect.width) || 0;
+                  const ah = Number(anchorRect.height) || 0;
+                  if (w > 0 && h > 0 && aw > 0 && ah > 0) {
+                    const TOL = 4;
+                    const containedInImg =
+                      anchorRect.left >= imgRect.left - TOL &&
+                      anchorRect.top >= imgRect.top - TOL &&
+                      anchorRect.right <= imgRect.right + TOL &&
+                      anchorRect.bottom <= imgRect.bottom + TOL;
+                    if (containedInImg) {
+                      map.set(anchor, item);
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            // defensive: closest, contains, or getBoundingClientRect can
+            // throw on disconnected / exotic nodes
+          }
+        }
+        // === END PHASE_TYPE_E_ANCHOR_REGISTER ===
         // === PHASE27D_HOVER_COMPANIONS_REGISTER (Type E) ===
         if (item.hoverCompanions instanceof Set) {
           for (const comp of item.hoverCompanions) {
@@ -2650,6 +2734,32 @@ function buildImageToItem(items) {
             }
           }
         }
+        // === PHASE_TYPE_D_ANCHOR_REGISTER ===
+        // For each Type D dominantImg, also register the image's closest
+        // <a href> ancestor under that anchor as an imageToItem key.
+        // This lets the mouseover dispatcher resolve the Type D item
+        // when the pointer lands on the clickable anchor wrapping the
+        // thumbnail, even if the actual hover target is an overlay
+        // <div>, an icon, or any other descendant of the anchor —
+        // findItemByImage's closest-anchor fallback then resolves descendants too.
+        //
+        // Not applied to Type B (EVIDENCE_TYPE_INTERACTION): Type B's
+        // anchor semantics differ (whole-feed-unit interaction); Type B
+        // continues to rely on seedImages + companion registration.
+        if (item.evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR && seeds) {
+          for (const img of seeds) {
+            if (!img) continue;
+            try {
+              const anchor = img.closest?.('a[href]');
+              if (anchor && !map.has(anchor)) {
+                map.set(anchor, item);
+              }
+            } catch (e) {
+              // defensive: closest can throw on disconnected nodes
+            }
+          }
+        }
+        // === END PHASE_TYPE_D_ANCHOR_REGISTER ===
         // === PHASE27D_HOVER_COMPANIONS_REGISTER (Type B / D) ===
         if (item.hoverCompanions instanceof Set) {
           for (const comp of item.hoverCompanions) {
@@ -2666,15 +2776,39 @@ function buildImageToItem(items) {
 }
 
 export function ensureClusterCacheFromState() {
+  // === PHASE_CLUSTER_CACHE_REF ===
+  // Fast path: when state.itemMap has not been replaced since the last
+  // rebuild, the existing clusterLookup and imageToItem are still valid.
+  // Both maps are derived purely from state.itemMap's contents and the
+  // codebase only mutates state.itemMap via full-array reassignment, so
+  // reference equality is a sufficient cache key. See module-level
+  // cache variable comment for the invariant.
+  const currentMapRef = state.itemMap;
+  if (currentMapRef && currentMapRef === _lastClusterCacheRef) {
+    return;
+  }
+  // === END PHASE_CLUSTER_CACHE_REF ===
   try {
     const list = Array.isArray(state.itemMap) ? state.itemMap : [];
     clusterLookup = new Set(list.map((x) => x.element).filter(Boolean));
     // === PHASE27A_IMAGE_TO_ITEM ===
     imageToItem = buildImageToItem(list);
     // === END PHASE27A_IMAGE_TO_ITEM ===
+    // === PHASE_CLUSTER_CACHE_REF ===
+    // Successful rebuild: record the current state.itemMap reference so
+    // subsequent calls can short-circuit until state.itemMap is replaced.
+    // Stored *after* the rebuild so a throw inside the try block leaves
+    // the cache key cleared via the catch path.
+    _lastClusterCacheRef = state.itemMap;
+    // === END PHASE_CLUSTER_CACHE_REF ===
   } catch (e) {
     clusterLookup = new Set();
     imageToItem = new Map();
+    // === PHASE_CLUSTER_CACHE_REF ===
+    // Reset on failure — next call must retry the rebuild rather than
+    // falsely short-circuit against a stale cached reference.
+    _lastClusterCacheRef = null;
+    // === END PHASE_CLUSTER_CACHE_REF ===
   }
 }
 
@@ -2691,7 +2825,37 @@ export function ensureClusterCacheFromState() {
 export function findItemByImage(el) {
   try {
     if (!el || el.nodeType !== 1) return null;
-    return imageToItem.get(el) || null;
+    const direct = imageToItem.get(el);
+    if (direct) return direct;
+    // === PHASE_TYPE_D_ANCHOR_FALLBACK ===
+    // Type D / Type E items register their dominantImg's or <img>'s closest <a href> ancestor
+    // in imageToItem (see buildImageToItem Type D / Type E anchor keys). The
+    // pointer often lands on a descendant of that <a> — overlay <div>s,
+    // info panels, icons, avatar imgs — not the <a> itself and not on
+    // the registered dominantImg. When the direct lookup misses, walk
+    // up to the nearest <a href> ancestor and retry the lookup there.
+    //
+    // Skip when:
+    //   - el is itself an <a> (the direct lookup above already handled
+    //     it; closest would return el and produce a redundant lookup,
+    //     though it would not loop)
+    //   - no <a href> ancestor exists (el is outside any anchor)
+    //   - the resolved <a> is not in imageToItem (it's not part of
+    //     any item's registered anchor set)
+    //
+    // Cost: at most one closest('a[href]') walk per missed mouseover.
+    // closest is a plain DOM walk, no getComputedStyle. Layout-safe.
+    try {
+      const ancestorAnchor = el.closest?.('a[href]');
+      if (ancestorAnchor && ancestorAnchor !== el) {
+        const viaAnchor = imageToItem.get(ancestorAnchor);
+        if (viaAnchor) return viaAnchor;
+      }
+    } catch (e) {
+      // defensive: closest can throw on disconnected nodes
+    }
+    // === END PHASE_TYPE_D_ANCHOR_FALLBACK ===
+    return null;
   } catch (e) {
     return null;
   }
