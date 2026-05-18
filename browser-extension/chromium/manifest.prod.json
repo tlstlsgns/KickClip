@@ -3,7 +3,7 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuN16VDVWJjz5UtO58XjGBzgDYEbFngGUwvpw4SS6WmEYGfi9IyDOnF4AahHrT9/75uNFDm3Uc0K0t72071dIPKIR2TCkzERpVNmZScloZXx6F7Xt68IsIIRnPSK+J785eNDeE4qdnmc5SFfulTfDTbvy4G4Q1IfJjEJ6n27gNIqWMjBLVetN2sxw9/U21Rr3D+2F8b0Ub57U5AIWz2N/NhghObgSul5oR6COzU3AWW8qnwBf8RQhjSiQpyYHokRpF6S425j+CdJCSJ0svqar7V/o0qgvxXNCtcji2nSFTp9IxNqBXqjofC0DK1xhYBXOfNRHxIkeTP1FLex2n6g/AwIDAQAB",
   "name": "KickClip",
   "version": "1.1.9",
-  "description": "Save images and SNS posts with Cmd+Shift+S. To folder or Drive. Auto-sorted into Img / SNS categories.",
+  "description": "Save images and SNS posts with a shortcut. To folder or Drive. Auto-sorted into Img / SNS categories.",
   "icons": {
     "16": "assets/icons/icon_16.png",
     "32": "assets/icons/icon_32.png",
@@ -78,15 +78,6 @@
       ]
     }
   ],
-  "commands": {
-    "save-url": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+S",
-        "mac": "Command+Shift+S"
-      },
-      "description": "Save current URL or hovered image"
-    }
-  },
   "side_panel": {
     "default_path": "sidepanel.html"
   },

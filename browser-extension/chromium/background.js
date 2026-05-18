@@ -2,8 +2,6 @@ importScripts(chrome.runtime.getURL('config.js'));
 
 // Track last ping time to detect if we should ping on focus
 let lastPingTime = 0;
-let _shortcutPollTimer = null;
-let _shortcutPollBaseline = null;
 
 let _savedUrlsCache = [];
 let _cachedUserId = null; // cached login state for synchronous access in onCommand
@@ -72,49 +70,6 @@ async function getCachedUserId() {
   } catch {
     return null;
   }
-}
-
-/**
- * Reads the current shortcut for the 'save-url' command from Chrome's
- * commands API. Returns a string like 'Ctrl+Shift+S' or 'MacCtrl+Shift+S',
- * or null if unavailable.
- */
-async function getCurrentShortcut() {
-  try {
-    const commands = await chrome.commands.getAll();
-    const cmd = commands.find((c) => c.name === 'save-url');
-    return cmd?.shortcut || null;
-  } catch {
-    return null;
-  }
-}
-
-function stopShortcutPolling() {
-  if (_shortcutPollTimer !== null) {
-    clearTimeout(_shortcutPollTimer);
-    _shortcutPollTimer = null;
-  }
-  _shortcutPollBaseline = null;
-}
-
-async function runShortcutPoll(deadline) {
-  if (Date.now() >= deadline) {
-    stopShortcutPolling();
-    return;
-  }
-  try {
-    const current = await getCurrentShortcut();
-    if (current && current !== _shortcutPollBaseline) {
-      // Shortcut changed — update baseline and notify Side Panel
-      // Keep polling so further changes are also detected
-      _shortcutPollBaseline = current;
-      chrome.storage.local.set({ kickclipShortcut: current }).catch(() => {});
-      chrome.runtime.sendMessage({ action: 'shortcut-updated', shortcut: current })
-        .catch(() => {});
-    }
-  } catch {}
-  // Schedule next tick
-  _shortcutPollTimer = setTimeout(() => runShortcutPoll(deadline), 800);
 }
 
 /**
@@ -200,87 +155,20 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   }
 });
 
-// Listen for keyboard shortcut command
-chrome.commands.onCommand.addListener((command) => {
-  if (command === 'save-url') {
-    // IMMEDIATELY send placeholder to Electron app (before any async operations)
-    // This ensures instant UI feedback
-    const timestamp = Date.now();
-    const placeholderPayload = {
-      url: 'about:blank',
-      title: 'Loading...',
-      timestamp: timestamp,
-      saved_by: 'extension',
-    };
-    
-    // Send placeholder IMMEDIATELY (fire and forget, don't await)
-    fetch('http://localhost:3001/pending-save', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(placeholderPayload),
-    }).catch(() => {
-      // Silently fail if Electron app is not running
-    });
-    
-    // Now send message to active tab's content script to process the save
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs && tabs.length > 0 && tabs[0]) {
-        const tabId = tabs[0].id;
-        const tabUrl = tabs[0].url || 'unknown';
-        
-        // Check if this is a system page where we can't inject
-        if (tabUrl.startsWith('chrome://') || tabUrl.startsWith('chrome-extension://') || tabUrl.startsWith('edge://') || tabUrl.startsWith('arc://')) {
-          return;
-        }
-        
-        // Try to send message to content script (should be already injected via manifest)
-        chrome.tabs.sendMessage(tabId, { action: 'save-url' }, (response) => {
-          if (chrome.runtime.lastError) {
-            const errorMsg = chrome.runtime.lastError.message;
-            
-            const isConnectionError = errorMsg.includes('Could not establish connection') || 
-                                     errorMsg.includes('Receiving end does not exist') || 
-                                     errorMsg.includes('message port closed');
-            
-            if (isConnectionError) {
-              chrome.scripting.executeScript({
-                target: { tabId: tabId },
-                func: () => !!window.__kcMainLoaded
-              }).then((results) => {
-                const mainLoaded = results && results[0] && results[0].result === true;
-                if (mainLoaded) {
-                  setTimeout(() => {
-                    chrome.tabs.sendMessage(tabId, { action: 'save-url' }, () => {});
-                  }, 200);
-                } else {
-                  chrome.scripting.executeScript({
-                    target: { tabId: tabId },
-                    files: ['content-loader.js']
-                  }).then(() => {
-                    setTimeout(() => {
-                      chrome.tabs.sendMessage(tabId, { action: 'save-url' }, () => {});
-                    }, 300);
-                  }).catch(() => {});
-                }
-              }).catch(() => {
-                chrome.scripting.executeScript({
-                  target: { tabId: tabId },
-                  files: ['content-loader.js']
-                }).then(() => {
-                  setTimeout(() => {
-                    chrome.tabs.sendMessage(tabId, { action: 'save-url' }, () => {});
-                  }, 300);
-                }).catch(() => {});
-              });
-            }
-          }
-        });
-      }
-    });
-  }
-});
+// === REMOVED: chrome.commands shortcut path ===
+// The clip shortcut is now handled entirely by the content-script
+// keydown listener (coreEntry.js PHASE_KEYDOWN_SHORTCUT). The legacy
+// chrome.commands.onCommand listener — together with getCurrentShortcut,
+// runShortcutPoll/stopShortcutPolling, and the 'get-shortcut' /
+// 'start-shortcut-polling' message handlers — was removed in
+// Sub-phase 4b of the custom-shortcut feature.
+//
+// Note: the onCommand listener previously posted a "Loading..."
+// placeholder to the Electron desktop app at http://localhost:3001/
+// pending-save for instant UI feedback. That integration is intentionally
+// removed here; restoring it (likely from the content-script keydown
+// path) is tracked as separate future work.
+// === END REMOVED ===
 
 // Create context menu items
 function createContextMenus() {
@@ -800,24 +688,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ userId: userId || null });
     });
     return true; // async response
-  }
-
-  if (request.action === 'get-shortcut') {
-    getCurrentShortcut().then((shortcut) => {
-      sendResponse({ shortcut: shortcut || '' });
-    });
-    return true; // async
-  }
-
-  if (request.action === 'start-shortcut-polling') {
-    stopShortcutPolling();
-    getCurrentShortcut().then((baseline) => {
-      _shortcutPollBaseline = baseline || '';
-      const deadline = Date.now() + 60000; // 60 s max
-      _shortcutPollTimer = setTimeout(() => runShortcutPoll(deadline), 800);
-    }).catch(() => {});
-    sendResponse({ success: true });
-    return true;
   }
 
   // Generic Google OAuth token handler — replaces prior single-purpose
