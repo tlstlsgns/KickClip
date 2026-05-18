@@ -558,6 +558,34 @@ async function findPrimaryImageAnchor(container) {
   return null;
 }
 
+// === PHASE_OVERLAY_HOVER_GATE (helper) ===
+// Visual hit-test for the overlay gate. Rect-based using pointer coords
+// is the source of truth because DOM `contains` fails on layouts that
+// stack sibling overlay elements above the image (e.g. ArtStation's
+// gallery-grid-overlay on top of gallery-grid-background-image — the
+// pointer is over the image visually, but `event.target` lands on the
+// stacked overlay div, which is a sibling of the image, not a descendant).
+//
+// Returns true if the gate should pass (pointer inside, or info missing).
+// Returns false only when coords are finite, the overlay rect is valid,
+// and the pointer is clearly outside. Falls back to DOM `contains` when
+// coords are unavailable (no current call site, but defaults allow it).
+function isPointerInsideOverlay(overlayEl, x, y, fallbackTarget) {
+  if (!overlayEl) return true;
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    try {
+      const r = overlayEl.getBoundingClientRect?.();
+      if (r && r.width > 0 && r.height > 0) {
+        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+      }
+    } catch (e) {
+      // defensive: getBoundingClientRect on disconnected nodes
+    }
+  }
+  return !!overlayEl.contains?.(fallbackTarget);
+}
+// === END PHASE_OVERLAY_HOVER_GATE (helper) ===
+
 async function updateCoreSelectionFromTarget(target, clientX = null, clientY = null) {
   // === PHASE27B_HOVER_DISPATCH ===
   // Phase 27 image-keyed activation:
@@ -848,6 +876,24 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     }
     overlayElement = determineTypeDOverlayElement(coreItem, dominantImg, anchor);
   }
+  // === PHASE_OVERLAY_HOVER_GATE ===
+  // New-activation gate: the pointer must be inside the resolved overlay
+  // region. For Type D where overlayElement is the dominantImg or branch
+  // container, this rejects activations triggered by hovering caption
+  // text, byline, or other figure chrome that sits inside the same
+  // coreItem. The hit-test uses pointer coords (clientX/Y) against the
+  // overlay's bounding rect because DOM `contains` fails on layouts that
+  // stack sibling overlay elements above the image (see helper notes).
+  // For Type B / Type E (overlayElement === coreItem), the precondition
+  // short-circuits → gate is a no-op.
+  if (
+    overlayElement !== coreItem &&
+    !isPointerInsideOverlay(overlayElement, clientX, clientY, target)
+  ) {
+    if (state.activeCoreItem) coreClear();
+    return false;
+  }
+  // === END PHASE_OVERLAY_HOVER_GATE ===
   state.activeOverlayElement = overlayElement;
   const overlayRect = overlayElement === coreItem
     ? null
@@ -2315,6 +2361,25 @@ function mountWindowListeners() {
     // Already on the active CoreItem? Nothing to do.
     const active = state.activeCoreItem;
     if (active && typeof active.contains === 'function' && active.contains(target)) {
+      // === PHASE_OVERLAY_HOVER_GATE ===
+      // Pointer moved within the same coreItem (mouseover skip optimization).
+      // For Type D, that's not enough — the pointer may have left the
+      // image-region overlay but stayed inside the caption / byline /
+      // other figure chrome. Re-check against state.activeOverlayElement
+      // via rect+clientXY hit-test (DOM contains is fooled by sibling
+      // overlay elements stacked above the image — see helper notes).
+      // For Type B / Type E, activeOverlayElement === active, so the
+      // condition `overlayEl !== active` short-circuits the gate.
+      const overlayEl = state.activeOverlayElement;
+      if (
+        overlayEl &&
+        overlayEl !== active &&
+        !isPointerInsideOverlay(overlayEl, e.clientX, e.clientY, target)
+      ) {
+        coreClear();
+        return;
+      }
+      // === END PHASE_OVERLAY_HOVER_GATE ===
       return;
     }
     // === PHASE27D_RELAXED_DISPATCH ===

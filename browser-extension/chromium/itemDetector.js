@@ -2937,31 +2937,84 @@ export function findItemByImage(el) {
 // or anchor is missing, the function returns coreItem so the existing
 // whole-card outline remains as a safe default.
 export function determineTypeDOverlayElement(coreItem, dominantImg, anchor) {
-  if (!dominantImg || !anchor) return coreItem;
+  if (!dominantImg) return coreItem;
   const imgRect = dominantImg.getBoundingClientRect?.();
-  const anchorRect = anchor.getBoundingClientRect?.();
-  if (!imgRect || !anchorRect) return coreItem;
+  if (!imgRect) return coreItem;
   if (imgRect.width <= 0 || imgRect.height <= 0) return coreItem;
-  if (anchorRect.width <= 0 || anchorRect.height <= 0) return coreItem;
 
-  // Case 1: img fully within anchor (no tolerance).
+  // Branch A: image-wrapping anchor is present (anchor is an ancestor of img).
+  // Apply the existing Case 1/2/3 rule with anchor as the comparator.
+  if (anchor && anchor.contains?.(dominantImg)) {
+    return applyOverlayCaseRule(coreItem, dominantImg, anchor, imgRect);
+  }
+
+  // === PHASE_OVERLAY_BRANCH_CONTAINER ===
+  // No image-wrapping anchor: the Type D anchor lives in a sibling subtree
+  // of the image (e.g. <figure> with image and caption-credit anchor as
+  // separate children). Find the dominantImg's ancestor whose immediate
+  // parent has a sibling containing an <a href>. That ancestor — the last
+  // common-image-side container before the image and anchor diverge —
+  // substitutes for the anchor in the case rule. The same clip-aware
+  // physics apply: img either fits inside this container (Case 1), or
+  // overflows but is clipped (Case 2), or overflows visibly (Case 3).
+  let cur = dominantImg.parentElement || null;
+  while (cur && cur !== coreItem) {
+    const parent = cur.parentElement;
+    if (!parent) break;
+    let matched = false;
+    for (const sibling of parent.children) {
+      if (sibling === cur) continue;
+      const isAnchorSibling =
+        sibling.tagName === 'A' && sibling.hasAttribute?.('href');
+      if (isAnchorSibling) {
+        matched = true;
+        break;
+      }
+      try {
+        if (sibling.querySelector?.('a[href]')) {
+          matched = true;
+          break;
+        }
+      } catch (e) {
+        // defensive: querySelector can throw on disconnected nodes
+      }
+    }
+    if (matched) {
+      return applyOverlayCaseRule(coreItem, dominantImg, cur, imgRect);
+    }
+    cur = cur.parentElement;
+  }
+  return coreItem;
+  // === END PHASE_OVERLAY_BRANCH_CONTAINER ===
+}
+
+// Shared Case 1/2/3 evaluation: `comparator` may be either the
+// image-wrapping anchor (Branch A) or the branch container (Branch B).
+// Case rules are identical in both cases — the physics of clipping
+// don't care about anchor semantics.
+function applyOverlayCaseRule(coreItem, dominantImg, comparator, imgRect) {
+  const comparatorRect = comparator.getBoundingClientRect?.();
+  if (!comparatorRect) return coreItem;
+  if (comparatorRect.width <= 0 || comparatorRect.height <= 0) return coreItem;
+
+  // Case 1: img fully within comparator (no tolerance).
   if (
-    imgRect.left >= anchorRect.left &&
-    imgRect.top >= anchorRect.top &&
-    imgRect.right <= anchorRect.right &&
-    imgRect.bottom <= anchorRect.bottom
+    imgRect.left >= comparatorRect.left &&
+    imgRect.top >= comparatorRect.top &&
+    imgRect.right <= comparatorRect.right &&
+    imgRect.bottom <= comparatorRect.bottom
   ) {
     return dominantImg;
   }
 
-  // img > anchor in layout. Check whether the overflow is actually clipped
-  // visually by any element on the img → anchor ancestor chain.
-  if (isImgClippedAlongAnchorPath(dominantImg, anchor)) {
-    // Case 2: clip restricts visible image area to within anchor.
-    return anchor;
+  // img > comparator in layout. Check whether the overflow is actually
+  // clipped visually by any element on the img → comparator ancestor chain.
+  if (isImgClippedAlongAnchorPath(dominantImg, comparator)) {
+    // Case 2: clip restricts visible image area to within comparator.
+    return comparator;
   }
 
-  // Case 3: no clip; img genuinely paints outside anchor's box.
+  // Case 3: no clip; img genuinely paints outside comparator's box.
   return dominantImg;
 }
 
