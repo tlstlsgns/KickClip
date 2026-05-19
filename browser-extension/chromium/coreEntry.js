@@ -79,6 +79,11 @@ const KC_MSG_PREFIX = '__kc__';
 const KC_SAVE_QUERY = '__kc_save_query__';
 const KC_SAVE_HANDLED = '__kc_save_handled__';
 const KC_SAVE_RELAY = '__kc_save_relay__';
+// === PHASE_IFRAME_HOVER_PROPAGATION ===
+const KC_IFRAME_HOVER = '__kc_iframe_hover__';
+const KC_IFRAME_HOVER_END = '__kc_iframe_hover_end__';
+const KC_IFRAME_CLIPBOARD_RESULT = '__kc_iframe_clipboard_result__';
+// === END PHASE_IFRAME_HOVER_PROPAGATION ===
 
 /** Metadata tooltip id — hidden briefly during save (shutter uses overlay fills in uiManager). */
 const METADATA_TOOLTIP_ID = 'kickclip-metadata-tooltip';
@@ -526,6 +531,15 @@ function coreClear() {
     state.activeHoverUrl = null;
     state.lastExtractedMetadata = null;
     try { hideCoreHighlight(); } catch (e) {}
+    // === PHASE_IFRAME_HOVER_PROPAGATION ===
+    // Notify top frame to clear its stored iframeHoverInfo.
+    try {
+      window.top.postMessage({
+        [KC_MSG_PREFIX]: true,
+        [KC_IFRAME_HOVER_END]: true,
+      }, '*');
+    } catch (_) { /* defensive */ }
+    // === END PHASE_IFRAME_HOVER_PROPAGATION ===
   } else {
     clearCoreSelection();
   }
@@ -912,6 +926,25 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     if (evidenceType === 'B') {
       requestInstagramPostDataForTypeB(coreItem, state.lastExtractedMetadata, null, null);
     }
+    // === PHASE_IFRAME_HOVER_PROPAGATION ===
+    // Broadcast hover info to top frame so top-frame keydown can clip
+    // iframe-internal images even when iframe Permissions Policy blocks
+    // navigator.clipboard.write. Top stores this and uses it as a
+    // fallback gate when its own state.activeCoreItem is empty.
+    try {
+      window.top.postMessage({
+        [KC_MSG_PREFIX]: true,
+        [KC_IFRAME_HOVER]: true,
+        url: String(syncedMeta?.activeHoverUrl || '').trim(),
+        imageUrl: String(syncedMeta?.image?.url || '').trim(),
+        category: String(syncedMeta?.category || '').trim(),
+        confirmedType: String(syncedMeta?.confirmedType || '').trim(),
+        title: String(syncedMeta?.title || '').trim(),
+        platform: String(syncedMeta?.platform || '').trim(),
+        pageUrl: String(window.location.href || '').trim(),
+      }, '*');
+    } catch (_) { /* defensive */ }
+    // === END PHASE_IFRAME_HOVER_PROPAGATION ===
     return true;
   }
   state.activeCoreItem = coreItem;
@@ -1510,20 +1543,29 @@ async function saveActiveCoreItem(request = {}) {
       // === PHASE_IFRAME_CLIPBOARD ===
       // IIFE runs in iframe too (iframe keydown). Outer !isIframeRelay gates relay.
       // === PHASE_SHUTTER_REMOVAL ===
-      (async () => {
-        try {
-          const clipboardResult = await coreClipboardPromise;
-          if (clipboardResult?.success) {
-            markCoreHighlightClipped();
-            const successText = coreClipboardCategory === 'Image'
-              ? 'Image clipped'
-              : 'URL clipped';
-            setCoreStatusBadgeText(successText);
-          } else {
-            setCoreStatusBadgeText('Clip failed');
-          }
-        } catch (_) { /* silent */ }
-      })();
+      // === PHASE_IFRAME_HOVER_PROPAGATION ===
+      // When clipping via iframeHoverInfo propagation, visual feedback
+      // (thick border + badge text) is owned by the iframe via
+      // KC_IFRAME_CLIPBOARD_RESULT — top-frame should not paint its own.
+      if (!request?.fromIframeHover) {
+      // === END PHASE_IFRAME_HOVER_PROPAGATION ===
+        (async () => {
+          try {
+            const clipboardResult = await coreClipboardPromise;
+            if (clipboardResult?.success) {
+              markCoreHighlightClipped();
+              const successText = coreClipboardCategory === 'Image'
+                ? 'Image clipped'
+                : 'URL clipped';
+              setCoreStatusBadgeText(successText);
+            } else {
+              setCoreStatusBadgeText('Clip failed');
+            }
+          } catch (_) { /* silent */ }
+        })();
+      // === PHASE_IFRAME_HOVER_PROPAGATION ===
+      }
+      // === END PHASE_IFRAME_HOVER_PROPAGATION ===
       // === END PHASE_SHUTTER_REMOVAL ===
       // === END PHASE_IFRAME_CLIPBOARD ===
     }
@@ -1944,6 +1986,50 @@ async function dataUrlToPngBlob(dataUrl) {
 //      origin iframes without an explicit clipboard-write Permissions
 //      Policy may fail with NotAllowedError — handled as clipboard
 //      failure (no thick border, badge text falls through to default).
+// === PHASE_IFRAME_HOVER_PROPAGATION ===
+// Build a synthetic state object from iframeHoverInfo so that
+// performSyncClipboardWrite (which expects state.lastExtractedMetadata
+// shape) can run without requiring local DOM access. Used in top-frame
+// keydown when only iframeHoverInfo is set (iframe hover but top focus).
+function buildSyntheticStateFromIframeHover(info) {
+  return {
+    activeCoreItem: {},  // stub — top frame has no Element ref; getDominantImageElement won't fire
+    activeHoverUrl: info.url,
+    lastExtractedMetadata: {
+      activeHoverUrl: info.url,
+      category: info.category,
+      confirmedType: info.confirmedType,
+      image: info.imageUrl ? { url: info.imageUrl } : null,
+      title: info.title,
+      platform: info.platform,
+    },
+  };
+}
+
+// Post clipboard result back to the originating iframe so it can apply
+// thick border + badge text feedback via markCoreHighlightClipped /
+// setCoreStatusBadgeText. The iframe's sourceWindow was captured at
+// hover-time. Defensive against window unload / cross-origin throw.
+function notifyIframeClipboardResult(info, clipboardPromise) {
+  if (!info || !clipboardPromise) return;
+  Promise.resolve(clipboardPromise).then((result) => {
+    const success = result?.success === true;
+    const category = String(info.category || '').trim();
+    const successText = success
+      ? (category === 'Image' ? 'Image clipped' : 'URL clipped')
+      : null;
+    try {
+      info.sourceWindow?.postMessage({
+        [KC_MSG_PREFIX]: true,
+        [KC_IFRAME_CLIPBOARD_RESULT]: true,
+        success,
+        successText,
+      }, '*');
+    } catch (_) { /* defensive — iframe may have unloaded */ }
+  }).catch(() => { /* silent */ });
+}
+// === END PHASE_IFRAME_HOVER_PROPAGATION ===
+
 // === PHASE_IFRAME_CLIPBOARD ===
 function performSyncClipboardWrite(state) {
   if (!state) return null;
@@ -2221,7 +2307,23 @@ function mountSaveMessageListener() {
       'message',
       async (e) => {
         try {
-          if (!e.data || !e.data[KC_MSG_PREFIX] || e.data[KC_SAVE_QUERY] !== true) return;
+          if (!e.data || !e.data[KC_MSG_PREFIX]) return;
+          // === PHASE_IFRAME_HOVER_PROPAGATION ===
+          if (e.data[KC_IFRAME_CLIPBOARD_RESULT] === true) {
+            try {
+              if (e.data.success === true) {
+                markCoreHighlightClipped();
+                if (e.data.successText) {
+                  setCoreStatusBadgeText(String(e.data.successText));
+                }
+              } else {
+                setCoreStatusBadgeText('Clip failed');
+              }
+            } catch (_) { /* defensive */ }
+            return;
+          }
+          // === END PHASE_IFRAME_HOVER_PROPAGATION ===
+          if (e.data[KC_SAVE_QUERY] !== true) return;
           const activeItem = state.activeCoreItem;
           const activeUrl = String(state.activeHoverUrl || '').trim();
           if (!activeItem || !activeUrl) return;
@@ -2355,11 +2457,15 @@ function mountWindowListeners() {
   document.addEventListener('keydown', async (event) => {
     if (!_activeShortcut) return;
     if (!matchesShortcut(event, _activeShortcut)) return;
-    // Shortcut matched. Check gate.
-    if (!state.activeCoreItem || !state.activeHoverUrl) {
+    // === PHASE_IFRAME_HOVER_PROPAGATION ===
+    const hasLocalHover = !!(state.activeCoreItem && state.activeHoverUrl);
+    const iframeInfo = state.iframeHoverInfo;
+    const hasIframeHover = !!(iframeInfo && iframeInfo.url);
+    if (!hasLocalHover && !hasIframeHover) {
       // Inactive — fall through to native behavior.
       return;
     }
+    // === END PHASE_IFRAME_HOVER_PROPAGATION ===
     // Active — claim the event and trigger clip.
     event.preventDefault();
     event.stopPropagation();
@@ -2370,18 +2476,63 @@ function mountWindowListeners() {
     // until resolution.
     let clipboardPromise = null;
     try {
-      clipboardPromise = performSyncClipboardWrite(state);
+      if (hasLocalHover) {
+        clipboardPromise = performSyncClipboardWrite(state);
+      } else {
+        // === PHASE_IFRAME_HOVER_PROPAGATION ===
+        const syntheticState = buildSyntheticStateFromIframeHover(iframeInfo);
+        clipboardPromise = performSyncClipboardWrite(syntheticState);
+        // === END PHASE_IFRAME_HOVER_PROPAGATION ===
+      }
     } catch (e) {
       // defensive — sync helper should not throw, but never let
       // clipboard issues block the save dispatch.
     }
     // === END PHASE_CLIPBOARD_SYNC_WRITE ===
+    // === PHASE_IFRAME_HOVER_PROPAGATION ===
+    if (hasIframeHover && !hasLocalHover && clipboardPromise) {
+      notifyIframeClipboardResult(iframeInfo, clipboardPromise);
+    }
+    // === END PHASE_IFRAME_HOVER_PROPAGATION ===
     try {
-      await saveActiveCoreItem({
-        action: 'save-url',
-        skipClipboard: true,
-        clipboardPromise,
-      });
+      if (hasLocalHover) {
+        await saveActiveCoreItem({
+          action: 'save-url',
+          skipClipboard: true,
+          clipboardPromise,
+        });
+      } else {
+        // === PHASE_IFRAME_HOVER_PROPAGATION ===
+        // Relay-style stub state for saveActiveCoreItem.
+        const savedActive = state.activeCoreItem;
+        const savedUrl = state.activeHoverUrl;
+        const savedMeta = state.lastExtractedMetadata;
+        state.activeCoreItem = {};
+        state.activeHoverUrl = iframeInfo.url;
+        state.lastExtractedMetadata = {
+          activeHoverUrl: iframeInfo.url,
+          category: iframeInfo.category,
+          confirmedType: iframeInfo.confirmedType,
+          image: iframeInfo.imageUrl ? { url: iframeInfo.imageUrl } : null,
+          title: iframeInfo.title,
+          platform: iframeInfo.platform,
+          _pageUrl: iframeInfo.pageUrl,
+          _isIframeHoverPropagation: true,
+        };
+        try {
+          await saveActiveCoreItem({
+            action: 'save-url',
+            skipClipboard: true,
+            clipboardPromise,
+            fromIframeHover: true,
+          });
+        } finally {
+          state.activeCoreItem = savedActive;
+          state.activeHoverUrl = savedUrl;
+          state.lastExtractedMetadata = savedMeta;
+        }
+        // === END PHASE_IFRAME_HOVER_PROPAGATION ===
+      }
     } catch (e) {
       // defensive — clip failures shouldn't crash the listener
     }
@@ -2619,6 +2770,44 @@ function mountIframeSaveQueryListener() {
   );
 }
 
+// === PHASE_IFRAME_HOVER_PROPAGATION ===
+// Top-frame-only listener that maintains state.iframeHoverInfo based
+// on KC_IFRAME_HOVER / KC_IFRAME_HOVER_END messages from iframe content
+// scripts. Provides the bridge for top keydown to clip iframe-internal
+// images when iframe Permissions Policy blocks navigator.clipboard.write.
+function mountIframeHoverPropagationListener() {
+  if (IS_IFRAME) return;
+  if (window.__kcIframeHoverPropagationListenerMounted) return;
+  window.__kcIframeHoverPropagationListenerMounted = true;
+  window.addEventListener(
+    'message',
+    (event) => {
+      try {
+        const data = event?.data;
+        if (!data || data[KC_MSG_PREFIX] !== true) return;
+        if (data[KC_IFRAME_HOVER] === true) {
+          state.iframeHoverInfo = {
+            url: String(data.url || '').trim(),
+            imageUrl: String(data.imageUrl || '').trim(),
+            category: String(data.category || '').trim(),
+            confirmedType: String(data.confirmedType || '').trim(),
+            title: String(data.title || '').trim(),
+            platform: String(data.platform || '').trim(),
+            pageUrl: String(data.pageUrl || '').trim(),
+            sourceWindow: event.source,
+          };
+        } else if (data[KC_IFRAME_HOVER_END] === true) {
+          if (state.iframeHoverInfo?.sourceWindow === event.source) {
+            state.iframeHoverInfo = null;
+          }
+        }
+      } catch (_) { /* defensive */ }
+    },
+    { passive: true }
+  );
+}
+// === END PHASE_IFRAME_HOVER_PROPAGATION ===
+
 async function checkKcUserAndInit() {
   try {
     const result = await new Promise((resolve) => {
@@ -2699,6 +2888,9 @@ function mountLifecycle() {
       });
     } catch (e) {}
     mountIframeSaveQueryListener();
+    // === PHASE_IFRAME_HOVER_PROPAGATION ===
+    mountIframeHoverPropagationListener();
+    // === END PHASE_IFRAME_HOVER_PROPAGATION ===
   }
 }
 

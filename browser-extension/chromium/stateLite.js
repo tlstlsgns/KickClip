@@ -10,5 +10,13 @@ export const state = {
   activeOverlayElement: null,
   lastExtractedMetadata: null,
   itemMap: [],
+  // === PHASE_IFRAME_HOVER_PROPAGATION ===
+  // Set on top frame when an iframe content script broadcasts hover info
+  // via KC_IFRAME_HOVER postMessage. Used to bridge top-frame keydown
+  // to iframe-internal image clip when iframe Permissions Policy blocks
+  // navigator.clipboard.write inside iframe. Cleared on KC_IFRAME_HOVER_END
+  // matching the same sourceWindow. Shape:
+  //   { url, imageUrl, category, confirmedType, title, platform, pageUrl, sourceWindow }
+  iframeHoverInfo: null,
+  // === END PHASE_IFRAME_HOVER_PROPAGATION ===
 };
-
