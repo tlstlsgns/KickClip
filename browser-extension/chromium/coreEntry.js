@@ -2046,6 +2046,30 @@ function notifyIframeClipboardResult(info, clipboardPromise) {
 }
 // === END PHASE_IFRAME_HOVER_PROPAGATION ===
 
+// === PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
+// Race the external image fetch against a 1000ms timeout. On Google Images
+// result tiles (and similar sites with lazy-populated href anchors), the
+// extracted high-resolution URL can stall at the image proxy (504 Gateway
+// Timeout) or the direct fetch (ERR_CONNECTION_TIMED_OUT). The Promise<Blob>
+// inside ClipboardItem then never resolves quickly, the browser holds the
+// clipboard slot until the eventual rejection, and the badge IIFE's
+// success: false path is silent for signed-in users. Racing against a short
+// timeout lets the buildImageBlobPromise chain fall through to its DOM-image
+// fallback (which is fast because the <img>'s currentSrc is already loaded),
+// preserving instant paste at the cost of slightly lower resolution.
+//
+// In-flight fetches that lose the race are not aborted — Q5: leave them to
+// be GC'd. The next fetch of the same URL hits browser cache anyway.
+const KC_SYNC_IMAGE_FETCH_TIMEOUT_MS = 1000;
+
+function raceImageUrlToPngBlob(imageUrl) {
+  return Promise.race([
+    imageUrlToPngBlob(imageUrl),
+    new Promise((resolve) => setTimeout(() => resolve(null), KC_SYNC_IMAGE_FETCH_TIMEOUT_MS)),
+  ]);
+}
+// === END PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
+
 // === PHASE_IFRAME_CLIPBOARD ===
 function performSyncClipboardWrite(state) {
   if (!state) return null;
@@ -2061,7 +2085,9 @@ function performSyncClipboardWrite(state) {
   const buildImageBlobPromise = () => (async () => {
     if (imageUrl) {
       try {
-        const b = await imageUrlToPngBlob(imageUrl);
+        // === PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
+        const b = await raceImageUrlToPngBlob(imageUrl);
+        // === END PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
         if (b) return b;
       } catch (_) { /* fall through */ }
     }
@@ -2089,7 +2115,9 @@ function performSyncClipboardWrite(state) {
   if (category === 'SNS' && confirmedType === 'contents' && imageUrl) {
     const blobPromise = (async () => {
       try {
-        const b = await imageUrlToPngBlob(imageUrl);
+        // === PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
+        const b = await raceImageUrlToPngBlob(imageUrl);
+        // === END PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
         if (b) return b;
       } catch (_) { /* fall through */ }
       throw new Error('SNS blob unavailable');
