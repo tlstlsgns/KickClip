@@ -1518,17 +1518,25 @@ async function saveActiveCoreItem(request = {}) {
     // with save result (from saveShutterStatus) after triggerShutterEffect
     // to produce a single unified Toast.
     const coreClipboardCategory = String(meta?.category || '').trim();
-    const coreClipboardPromise = (window.self === window.top)
-      ? performClipboardCopy(
-          coreClipboardCategory,
-          url,
-          activeItem instanceof Element ? activeItem : document.body,
-          {
-            confirmedType: String(meta?.confirmedType || '').trim(),
-            imageUrl: String(faviconImgUrl || meta?.image?.url || imgUrl || '').trim(),
-          }
-        )
-      : Promise.resolve({ success: false });
+    // === PHASE_CLIPBOARD_SYNC_WRITE ===
+    // When the keydown shortcut path already wrote to the clipboard
+    // in its sync turn, reuse its promise here so the badge IIFE
+    // below reports the correct success/failure. Legacy paths
+    // (save-url message, iframe relay) still call performClipboardCopy.
+    const coreClipboardPromise = (request?.skipClipboard)
+      ? (request.clipboardPromise || Promise.resolve({ success: false }))
+      : (window.self === window.top)
+        ? performClipboardCopy(
+            coreClipboardCategory,
+            url,
+            activeItem instanceof Element ? activeItem : document.body,
+            {
+              confirmedType: String(meta?.confirmedType || '').trim(),
+              imageUrl: String(faviconImgUrl || meta?.image?.url || imgUrl || '').trim(),
+            }
+          )
+        : Promise.resolve({ success: false });
+    // === END PHASE_CLIPBOARD_SYNC_WRITE ===
 
     // Generate tempId for end-to-end matching: Optimistic Card ↔ Firestore doc
     // Only generated in top-level frame (iframes skip Optimistic Card dispatch).
@@ -1966,6 +1974,91 @@ async function dataUrlToPngBlob(dataUrl) {
   }
 }
 
+// === PHASE_CLIPBOARD_SYNC_WRITE ===
+// Sync entry point for the clipboard write, called from the keydown
+// handler's sync turn BEFORE any await. Uses the W3C Async Clipboard
+// API pattern of passing a Promise<Blob> inside ClipboardItem — the
+// browser reserves the clipboard slot during user activation and
+// resolves the blob asynchronously in the background, eliminating the
+// fire-and-forget race that lets fast paste land before clipboard
+// write completes.
+//
+// Returns a Promise<{success: boolean}> for image/URL paths, or null
+// when there's nothing to copy. The legacy performClipboardCopy stays
+// for the save-url message path (no user gesture there) and is invoked
+// from saveActiveCoreItem when request.skipClipboard is falsy.
+//
+// Branches:
+//   1. Image: Primary imageUrlToPngBlob(imageUrl), fallback to
+//      imgElementToBlob(getDominantImageElement(activeItem)). One
+//      Promise<Blob> passed to ClipboardItem.
+//   2. SNS contents + imageUrl: imageUrlToPngBlob only (no URL text
+//      fallback in sync path per maintainer — instant clipboard
+//      prioritized).
+//   3. Default: navigator.clipboard.writeText(url).
+//   4. Iframe (window.self !== window.top): null — clipboard is
+//      top-frame only.
+function performSyncClipboardWrite(state) {
+  if (window.self !== window.top) return null;
+  if (!state) return null;
+
+  const meta = state.lastExtractedMetadata || {};
+  const category = String(meta.category || '').trim();
+  const confirmedType = String(meta.confirmedType || '').trim();
+  const imageUrl = String(meta.image?.url || '').trim();
+  const url = String(state.activeHoverUrl || meta.activeHoverUrl || '').trim();
+  const activeItem = state.activeCoreItem;
+
+  const buildImageBlobPromise = () => (async () => {
+    if (imageUrl) {
+      try {
+        const b = await imageUrlToPngBlob(imageUrl);
+        if (b) return b;
+      } catch (_) { /* fall through */ }
+    }
+    if (activeItem instanceof Element) {
+      const imgEl = getDominantImageElement(activeItem);
+      if (imgEl) {
+        try {
+          const b = await imgElementToBlob(imgEl);
+          if (b) return b;
+        } catch (_) { /* fall through */ }
+      }
+    }
+    throw new Error('Image blob unavailable');
+  })();
+
+  if (category === 'Image') {
+    if (!imageUrl && !(activeItem instanceof Element)) return null;
+    const blobPromise = buildImageBlobPromise();
+    return navigator.clipboard
+      .write([new ClipboardItem({ 'image/png': blobPromise })])
+      .then(() => ({ success: true }))
+      .catch(() => ({ success: false }));
+  }
+
+  if (category === 'SNS' && confirmedType === 'contents' && imageUrl) {
+    const blobPromise = (async () => {
+      try {
+        const b = await imageUrlToPngBlob(imageUrl);
+        if (b) return b;
+      } catch (_) { /* fall through */ }
+      throw new Error('SNS blob unavailable');
+    })();
+    return navigator.clipboard
+      .write([new ClipboardItem({ 'image/png': blobPromise })])
+      .then(() => ({ success: true }))
+      .catch(() => ({ success: false }));
+  }
+
+  if (!url) return null;
+  return navigator.clipboard
+    .writeText(url)
+    .then(() => ({ success: true }))
+    .catch(() => ({ success: false }));
+}
+// === END PHASE_CLIPBOARD_SYNC_WRITE ===
+
 /**
  * Perform clipboard copy based on category. Returns success/fail info without
  * showing any Toast. Toast display is handled separately by the caller after
@@ -2339,8 +2432,25 @@ function mountWindowListeners() {
     // Active — claim the event and trigger clip.
     event.preventDefault();
     event.stopPropagation();
+    // === PHASE_CLIPBOARD_SYNC_WRITE ===
+    // Call clipboard write in the sync turn (before any await) to
+    // preserve user activation. Blob fetch/encode runs async via
+    // Promise<Blob> inside ClipboardItem; browser holds the slot
+    // until resolution.
+    let clipboardPromise = null;
     try {
-      await saveActiveCoreItem({ action: 'save-url' });
+      clipboardPromise = performSyncClipboardWrite(state);
+    } catch (e) {
+      // defensive — sync helper should not throw, but never let
+      // clipboard issues block the save dispatch.
+    }
+    // === END PHASE_CLIPBOARD_SYNC_WRITE ===
+    try {
+      await saveActiveCoreItem({
+        action: 'save-url',
+        skipClipboard: true,
+        clipboardPromise,
+      });
     } catch (e) {
       // defensive — clip failures shouldn't crash the listener
     }
