@@ -48,7 +48,7 @@ export {
   renderItemMapCandidates,
   showGreenCandidateOutline,
   showCoreHighlight,
-  updateCoreHighlightClass,
+  markCoreHighlightClipped,
   hideCoreHighlight,
   showMetadataTooltip,
   hideMetadataTooltip,
@@ -59,7 +59,6 @@ export {
   hideCoreStatusBadge,
   positionCoreStatusBadge,
   clearCoreSelection,
-  triggerShutterEffect,
   setAiTooltipContent,
   clearAiTooltipContent,
 } from './uiManager.js';

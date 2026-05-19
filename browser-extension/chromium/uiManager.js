@@ -172,17 +172,13 @@ function buildOverlayStyleElement() {
 #kickclip-highlight-overlay.kickclip-default.kickclip-size-large {
   box-shadow: 0 6px 36px 5px rgba(188, 19, 254, 0.60);
 }
-#kickclip-highlight-overlay.kickclip-default.shutter-success {
+#kickclip-highlight-overlay.kickclip-default.kickclip-clipped {
   box-shadow: 0 0 0 2px rgba(188, 19, 254, 1);
 }
-/* shutter-error: no override — falls through to .kickclip-default */
 
 /* ── StatusBadge colors ── */
 #kickclip-status-badge-core {
   background: ${BRAND.KEY_COLOR_HEX};
-}
-#kickclip-status-badge-core.shutter-error {
-  background: rgb(239, 68, 68);
 }
 
 `;
@@ -204,45 +200,6 @@ function injectKickClipOverlayStyles() {
 }
 
 injectKickClipOverlayStyles();
-
-/**
- * Update CoreHighlight class only — no position or opacity change.
- * Sync the status_badge to match the shutter state:
- *   - 'success' → success class only (TEXT NOT SET HERE — caller invokes
- *                 setCoreStatusBadgeText with category-aware wording).
- *   - 'error'   → error class + registered failed text.
- *   - 'none'    → no class + registered default text.
- * Used for: shutter feedback, hover restore.
- */
-export function updateCoreHighlightClass(isSaved, shutterState = 'none', forceReplace = false) {
-  try {
-    const overlay = getKCShadowElement(PURPLE_OVERLAY_ID);
-    if (!overlay) return;
-    if (!forceReplace && shutterState === 'none' &&
-        (overlay.classList.contains('shutter-success') ||
-         overlay.classList.contains('shutter-error'))) return;
-    overlay.classList.remove('shutter-success', 'shutter-error');
-    if (shutterState === 'success') overlay.classList.add('shutter-success');
-    else if (shutterState === 'error') overlay.classList.add('shutter-error');
-
-    // Sync core status badge
-    const coreBadge = getKCBadgeShadowElement(CORE_BADGE_ID);
-    if (!coreBadge) return;
-    coreBadge.style.transition = '';
-    coreBadge.classList.remove('shutter-success', 'shutter-error');
-    coreBadge.style.background = '';
-    if (shutterState === 'success') {
-      coreBadge.classList.add('shutter-success');
-      // Text intentionally NOT set here — caller (coreEntry) invokes
-      // setCoreStatusBadgeText with category-aware wording.
-    } else if (shutterState === 'error') {
-      coreBadge.classList.add('shutter-error');
-      coreBadge.textContent = _coreBadgeFailedText;
-    } else {
-      coreBadge.textContent = _coreBadgeDefaultText;
-    }
-  } catch (e) {}
-}
 
 const GREEN_LAYER_ID = 'kickclip-green-candidate-layer';
 const METADATA_TOOLTIP_ID = 'kickclip-metadata-tooltip';
@@ -385,9 +342,8 @@ export function setCoreBadgeTexts({ defaultText, failedText } = {}) {
 /**
  * Imperatively set the status_badge text. Used by coreEntry after a
  * successful clip to render category-aware text ("Image clipped" /
- * "URL clipped"). Does not change visual state classes
- * (shutter-success / shutter-error) — those are still driven by
- * triggerShutterEffect.
+ * "URL clipped"). Does not change overlay visual state — the thick
+ * clipped ring is applied via markCoreHighlightClipped().
  */
 export function setCoreStatusBadgeText(text) {
   try {
@@ -400,17 +356,7 @@ export function setCoreStatusBadgeText(text) {
 export function showCoreStatusBadge(badgeState = 'default') {
   try {
     const el = ensureCoreBadge();
-    el.classList.remove('shutter-success', 'shutter-error');
-    if (badgeState === 'success') {
-      el.classList.add('shutter-success');
-      // Text set by caller via setCoreStatusBadgeText.
-    } else if (badgeState === 'error') {
-      el.textContent = _coreBadgeFailedText;
-      el.classList.add('shutter-error');
-    } else {
-      el.textContent = _coreBadgeDefaultText;
-    }
-    el.style.background = '';
+    el.textContent = _coreBadgeDefaultText;
     el.style.opacity = '1';
   } catch (e) {}
 }
@@ -422,8 +368,6 @@ export function hideCoreStatusBadge() {
       // Keep opacity transition for fade-out; disable only background transition for instant color reset
       el.style.transition = 'opacity 0.15s ease';
       el.style.opacity = '0';
-      el.classList.remove('shutter-success', 'shutter-error');
-      el.style.background = '';
       // Re-enable transition after reset so next show animates correctly
       requestAnimationFrame(() => {
         try { el.style.transition = ''; } catch (e) {}
@@ -665,10 +609,9 @@ export function showCoreHighlight(coreItem, isSaved = false, rectOverride = null
     const isScrollUpdate = rectOverride !== null && !forceRestart;
 
     if (!isScrollUpdate) {
-      // Reset shutter classes immediately (no transition) before applying new state.
+      // Reset clipped ring immediately (no transition) before applying new state.
       // Handles adjacent CoreItem hover where hideCoreHighlight() is not called.
-      const coreBadge = getKCBadgeShadowElement(CORE_BADGE_ID);
-      overlay.classList.remove('shutter-success', 'shutter-error');
+      overlay.classList.remove('kickclip-clipped');
       // Phase 17: classify element by size (sqrt(area) — equivalent
       // square side length) and apply the matching size class. The
       // CSS scales box-shadow blur/spread so larger elements get more
@@ -686,15 +629,6 @@ export function showCoreHighlight(coreItem, isSaved = false, rectOverride = null
       } else {
         overlay.classList.add('kickclip-size-large');
       }
-      if (coreBadge) {
-        coreBadge.style.transition = 'none';
-        coreBadge.classList.remove('shutter-success', 'shutter-error');
-        coreBadge.style.background = '';
-        requestAnimationFrame(() => {
-          try { coreBadge.style.transition = ''; } catch (e) {}
-        });
-      }
-      updateCoreHighlightClass(false);
     }
     _activeCoreHighlightItem = coreItem;
     return true;
@@ -707,27 +641,28 @@ export function hideCoreHighlight() {
   const overlay = getKCShadowElement(PURPLE_OVERLAY_ID);
   if (overlay) {
     overlay.style.opacity = '0';
-    // Reset shutter classes immediately — no transition on reset
-    overlay.classList.remove('shutter-success', 'shutter-error');
+    overlay.classList.remove('kickclip-clipped');
     _activeCoreHighlightItem = null;
   }
   hideCoreStatusBadge();
 }
 
-/**
- * Save confirmation “shutter”: status tint (green/red) on the core or full-page overlay.
- * @param {'core'|'page'} type
- * @param {'success'|'error'} status — from login + local server precheck
- */
-export function triggerShutterEffect(type, status = 'error') {
+// === PHASE_SHUTTER_REMOVAL ===
+// Apply the "clipped" visual state to the active core highlight overlay.
+// This is the thick purple ring that signals clipboard success. Called
+// from the badge IIFE in saveActiveCoreItem after navigator.clipboard.write
+// resolves successfully. Idempotent — re-applying does nothing.
+//
+// The class is cleared by the next hover cycle via showCoreHighlight's
+// existing class-reset logic. No explicit clear needed in normal flow.
+export function markCoreHighlightClipped() {
   try {
-    const shutterState = status === 'success' ? 'success' : 'error';
-    if (type === 'core') {
-      updateCoreHighlightClass(false, shutterState);
-      return;
-    }
+    const overlay = getKCShadowElement(PURPLE_OVERLAY_ID);
+    if (!overlay) return;
+    overlay.classList.add('kickclip-clipped');
   } catch (e) {}
 }
+// === END PHASE_SHUTTER_REMOVAL ===
 
 function ensureGreenLayer() {
   let layer = getKCShadowElement(GREEN_LAYER_ID);

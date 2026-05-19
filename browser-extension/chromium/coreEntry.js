@@ -13,7 +13,7 @@ import {
   getCurrentPlatform,
   normalizeShortcodeExtractionResult,
   showCoreHighlight,
-  updateCoreHighlightClass,
+  markCoreHighlightClipped,
   hideCoreHighlight,
   clearCoreSelection,
   ensureClusterCacheFromState,
@@ -29,7 +29,6 @@ import {
   renderItemMapCandidates,
   hideMetadataTooltip,
   detectItemCategory,
-  triggerShutterEffect,
   resolveAnchorUrl,
 } from './coreEngine.js';
 import {
@@ -178,7 +177,7 @@ function waitForRepaint() {
  * Temporarily hides purple overlay + metadata tooltip (opacity 0, layout preserved).
  * @returns {Array<{ el: HTMLElement, prevOpacity: string, prevTransition: string }>}
  */
-/** Hides only the metadata tooltip during save; purple/full-page shutter flash is `triggerShutterEffect`. */
+/** Hides only the metadata tooltip during save. */
 function hideKCSaveFeedbackUi() {
   const hidden = [];
   for (const id of [METADATA_TOOLTIP_ID]) {
@@ -202,7 +201,7 @@ function restoreKCSaveFeedbackUi(hiddenEls) {
   }
 }
 
-/** Ensures a minimum visible shutter duration, then restores save-feedback UI and re-applies purple. */
+/** Ensures a minimum visible save-feedback duration, then restores UI and re-applies purple. */
 async function finalizeKCSaveFeedback(hiddenEls, startedAt) {
   const elapsed = Date.now() - startedAt;
   const wait = Math.max(0, SAVE_FEEDBACK_KC_MIN_MS - elapsed);
@@ -214,12 +213,13 @@ async function finalizeKCSaveFeedback(hiddenEls, startedAt) {
     const currentActive = state.activeCoreItem;
     if (currentActive && currentActive.nodeType === 1) {
       const overlay = getKCShadowElement('kickclip-highlight-overlay');
-      const hasShutter = overlay &&
-        (overlay.classList.contains('shutter-success') ||
-         overlay.classList.contains('shutter-error'));
-      if (!hasShutter) {
+      // === PHASE_SHUTTER_REMOVAL ===
+      const hasClippedHighlight = overlay &&
+        overlay.classList.contains('kickclip-clipped');
+      if (!hasClippedHighlight) {
         showCoreHighlight(currentActive, false);
       }
+      // === END PHASE_SHUTTER_REMOVAL ===
     }
   } catch (e) {}
 }
@@ -1286,52 +1286,6 @@ function extractCoreItemHtmlContext(element) {
   }
 }
 
-async function getCachedUserIdForShutter() {
-  try {
-    const r = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: 'get-cached-user-id' }, (response) => {
-        resolve(chrome.runtime.lastError ? null : response);
-      });
-    });
-    if (r?.userId) return r.userId;
-    await new Promise((res) => setTimeout(res, 150));
-    const r2 = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: 'get-cached-user-id' }, (response) => {
-        resolve(chrome.runtime.lastError ? null : response);
-      });
-    });
-    return r2?.userId || null;
-  } catch {
-    return null;
-  }
-}
-
-async function isKCLocalServerReachable() {
-  return true;
-}
-
-async function isKCLocalServerReachableViaBackground() {
-  try {
-    const response = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: 'get-server-status' }, (res) => {
-        resolve(chrome.runtime.lastError ? null : res);
-      });
-    });
-    return response?.ok === true;
-  } catch {
-    return false;
-  }
-}
-
-/** `'success'` | `'error'` — passed to `triggerShutterEffect` for green/red shutter + status badge. */
-async function resolveSaveShutterStatus() {
-  const [uid, serverOk] = await Promise.all([
-    getCachedUserIdForShutter(),
-    IS_IFRAME ? isKCLocalServerReachableViaBackground() : isKCLocalServerReachable(),
-  ]);
-  return uid && serverOk ? 'success' : 'error';
-}
-
 async function saveActiveCoreItem(request = {}) {
     const activeItem = state.activeCoreItem;
     const activeUrl = String(state.activeHoverUrl || '').trim();
@@ -1340,8 +1294,6 @@ async function saveActiveCoreItem(request = {}) {
     if (!activeItem || !activeUrl) {
       return { success: false, reason: 'no-core-item' };
     }
-
-    const saveShutterStatus = await resolveSaveShutterStatus();
 
     // CoreItem active → existing logic
     const meta = state.lastExtractedMetadata;
@@ -1371,8 +1323,8 @@ async function saveActiveCoreItem(request = {}) {
     // === END PHASE20_HOTFIX_CLIP_TIME_IMAGE ===
 
     // Relay mode: top-frame is processing a clip that originated inside a
-    // cross-origin iframe. The iframe handler already drew shutter +
-    // status_badge text in its own Shadow DOM (Phase 11a). The top frame
+    // cross-origin iframe. The iframe handler posts metadata only (no UI).
+    // The top frame
     // must not paint anything on its own highlight overlay / status_badge
     // here — doing so would tint whatever stale UI happens to be left
     // over from a previous top-frame hover, including completely
@@ -1514,9 +1466,8 @@ async function saveActiveCoreItem(request = {}) {
       }
     })();
 
-    // Clipboard copy: start async copy without blocking. Result is combined
-    // with save result (from saveShutterStatus) after triggerShutterEffect
-    // to produce a single unified Toast.
+    // Clipboard copy: start async copy without blocking. Badge IIFE below
+    // reports clipboard success/failure via markCoreHighlightClipped + text.
     const coreClipboardCategory = String(meta?.category || '').trim();
     // === PHASE_CLIPBOARD_SYNC_WRITE ===
     // When the keydown shortcut path already wrote to the clipboard
@@ -1544,7 +1495,7 @@ async function saveActiveCoreItem(request = {}) {
       ? `temp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
       : '';
 
-    // Immediately update _savedUrlSet before shutter so checkIsSavedSync() returns true
+    // Immediately update _savedUrlSet so checkIsSavedSync() returns true
     // even if saved-urls-updated arrives before fetch completes.
     if (isSignedIn()) {
       try {
@@ -1554,39 +1505,26 @@ async function saveActiveCoreItem(request = {}) {
     }
 
     if (!isIframeRelay) {
-      const effectiveCoreSaveShutterStatus = isSignedIn() ? saveShutterStatus : 'success';
-      triggerShutterEffect('core', effectiveCoreSaveShutterStatus);
-
-      // CoreItem clip feedback lives in the per-item status_badge.
-      // We wait for the clipboard result, then write the
-      // category-aware "clipped" wording on success. Failure text is already
-      // applied automatically by triggerShutterEffect('core', 'error') via
-      // the registered _coreBadgeFailedText.
-      //
-      // Skipped entirely in relay mode — the iframe handler already drew
-      // shutter and badge text in its own Shadow DOM (Phase 11a).
+      // CoreItem clip feedback: clipboard result drives overlay ring + badge text.
+      // Skipped in relay mode — top frame handles clipboard; iframe draws no UI.
       // === PHASE_IFRAME_CLIPBOARD ===
-      // IIFE now runs in iframe too so iframe keydown updates badge
-      // text on clipboard success. Outer !isIframeRelay still gates
-      // relay (top-frame relay-receiver path).
+      // IIFE runs in iframe too (iframe keydown). Outer !isIframeRelay gates relay.
+      // === PHASE_SHUTTER_REMOVAL ===
       (async () => {
         try {
           const clipboardResult = await coreClipboardPromise;
           if (clipboardResult?.success) {
+            markCoreHighlightClipped();
             const successText = coreClipboardCategory === 'Image'
               ? 'Image clipped'
               : 'URL clipped';
             setCoreStatusBadgeText(successText);
-          } else if (!isSignedIn()) {
-            triggerShutterEffect('core', 'error');
+          } else {
+            setCoreStatusBadgeText('Clip failed');
           }
-          // Signed-in case where clipboard fails but save might succeed:
-          // shutter already reflects save status correctly via
-          // saveShutterStatus; "Clip failed" text would be wrong because
-          // save did clip something to Firestore. Keep current behavior
-          // (text was set by triggerShutterEffect based on save status).
         } catch (_) { /* silent */ }
       })();
+      // === END PHASE_SHUTTER_REMOVAL ===
       // === END PHASE_IFRAME_CLIPBOARD ===
     }
 
@@ -2307,26 +2245,10 @@ function mountSaveMessageListener() {
               return;
             }
 
-            // Signed-out users get clipboard-only treatment in the top frame
-            // (Phase 2). Force success shutter here so the iframe's visual matches —
-            // no userId/server check is meaningful when no save will be attempted.
-            const saveShutterStatus = isSignedIn()
-              ? await resolveSaveShutterStatus()
-              : 'success';
-            triggerShutterEffect('core', saveShutterStatus);
-
-            // Mirror the top-frame Phase 10b behavior: set the per-item
-            // status_badge text in this iframe so the user sees "Image clipped"
-            // / "URL clipped" instead of the stale default. Each frame owns its
-            // own badge element, so the top-frame's setCoreStatusBadgeText call
-            // does NOT reach this iframe's UI. We only set success text on the
-            // success path — failure ('error') would already have written
-            // "Clip failed" via _coreBadgeFailedText through triggerShutterEffect.
-            if (saveShutterStatus === 'success') {
-              const iframeCategory = String(state.lastExtractedMetadata?.category || '').trim();
-              const successText = iframeCategory === 'Image' ? 'Image clipped' : 'URL clipped';
-              setCoreStatusBadgeText(successText);
-            }
+            // === PHASE_SHUTTER_REMOVAL ===
+            // Iframe relay does no visual feedback. The top frame's clipboard
+            // result determines success; iframe has no path to know.
+            // === END PHASE_SHUTTER_REMOVAL ===
             await waitForRepaint();
 
             window.top.postMessage(
