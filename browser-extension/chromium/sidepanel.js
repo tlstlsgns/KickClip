@@ -592,15 +592,8 @@ window.addEventListener('blur', () => {
 });
 // === END PHASE_SHORTCUT_RECORDER ===
 
-// ── Category section order ────────────────────────────────────────────────
-const CATEGORY_ORDER = ['Img', 'SNS'];
-
-let _activeTab = 'Img';
-let _isCategoryTransitioning = false;
-let _categoryTransitionTimer = null;
+// === PHASE_SIDEPANEL_UNIFIED_LIST ===
 let _clearBarExitConfirmPending = null;
-
-const TAB_TRANSITION_MS = 300; // matches CSS transition duration
 
 function dismissClearConfirmPendingIfActive() {
   if (_clearBarExitConfirmPending) {
@@ -608,66 +601,31 @@ function dismissClearConfirmPendingIfActive() {
   }
 }
 
-/**
- * Single source of truth for switching the active category tab.
- * Handles:
- *  - early return on same-tab no-op
- *  - confirm-pending dismiss on the clear bar (if active)
- *  - tab button active-class toggle
- *  - carousel transform
- *  - transition flag set/clear (drives clear button disabled state)
- *  - clear button disabled-state recompute
- *
- * Callers: setupTabHandlers (user click), addOptimisticCard (auto
- * switch when an optimistic card lands in a non-active category),
- * and any future automated tab switch.
- */
-function setActiveTab(newTab) {
-  if (newTab == null || !CATEGORY_ORDER.includes(newTab)) return;
-  if (newTab === _activeTab) return;
-
-  // Dismiss confirm-pending on the clear bar before changing tabs.
-  // The user has effectively cancelled the intent by moving away.
-  dismissClearConfirmPendingIfActive();
-
-  _activeTab = newTab;
-
-  // Tab button active class
-  document.querySelectorAll('.sp-tab').forEach((b) => {
-    b.classList.toggle('active', b.dataset.tab === newTab);
-  });
-
-  // Carousel transform
-  const wrap = document.getElementById('sp-itemlist-wrap');
-  if (wrap) {
-    const tabIndex = CATEGORY_ORDER.indexOf(newTab);
-    wrap.style.transform = tabIndex > 0
-      ? `translateX(-${tabIndex * 25}%)`
-      : 'translateX(0%)';
-  }
-
-  // Transition flag: button disabled during slide
-  _isCategoryTransitioning = true;
-  if (_categoryTransitionTimer) clearTimeout(_categoryTransitionTimer);
-  _categoryTransitionTimer = setTimeout(() => {
-    _isCategoryTransitioning = false;
-    _categoryTransitionTimer = null;
-    updateClearButtonState();
-  }, TAB_TRANSITION_MS);
-
-  // Recompute disabled state immediately for the new active tab.
-  // Button stays disabled during transition (via the flag); after
-  // transition, recompute reflects the new tab's actual state.
-  updateClearButtonState();
+/** Dock clips: no directoryId (or sentinel 'undefined'). */
+function isDockItem(item) {
+  const dirId = item?.directoryId;
+  return !dirId || dirId === 'undefined';
 }
 
-function setupTabHandlers() {
-  document.querySelectorAll('.sp-tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      setActiveTab(btn.dataset.tab);
-    });
-  });
+function getUnifiedDockList() {
+  return document.getElementById('sp-unified-list');
 }
+
+function shouldUsePlaceholder(item) {
+  if (item?.img_url_method === 'favicon') return true;
+  const imgUrl = String(item?.img_url || '').trim();
+  if (imgUrl) return false;
+  const dom = String(item?.img_url_dom || '').trim();
+  return !dom;
+}
+
+function getCardThumbnailUrl(item) {
+  if (shouldUsePlaceholder(item)) return null;
+  const imgUrl = String(item?.img_url || '').trim();
+  if (imgUrl) return imgUrl;
+  return String(item?.img_url_dom || '').trim() || null;
+}
+// === END PHASE_SIDEPANEL_UNIFIED_LIST ===
 
 /**
  * Normalizes both legacy and new-schema item category/confirmedType.
@@ -690,22 +648,6 @@ function normalizeItemCategoryAndType(item) {
   return { category: rawCategory, confirmedType: rawType };
 }
 
-/**
- * Returns the target list box key ('Img' | 'SNS') for a given item,
- * or null if the item's category does not map to a visible bucket
- * (legacy records with unknown categories are intentionally hidden).
- * Uses the NEW schema category via normalization so legacy Firestore docs are routed correctly.
- */
-function resolveItemListKey(item) {
-  const { category } = normalizeItemCategoryAndType(item);
-  if (category === 'Image') return 'Img';
-  if (category === 'SNS')   return 'SNS';
-  // Anything else (legacy / unrecognized categories) → null
-  // Render path treats null as "do not render" — legacy records with
-  // unknown categories are hidden from the sidepanel UI but preserved
-  // in Firestore.
-  return null;
-}
 
 /**
  * Normalize the client-internal category value for dedup comparison.
@@ -775,7 +717,7 @@ function createTimelineDivider(label) {
  * Skips optimistic cards (data-optimistic-card).
  * Call this after all cards have been appended to the list.
  *
- * @param {HTMLElement} listEl - the .sp-category-list element
+ * @param {HTMLElement} listEl - the unified dock list element (#sp-unified-list)
  * @param {Array} items - the sorted array of Firestore items rendered into this list
  */
 function insertTimelineDividers(listEl, items) {
@@ -812,15 +754,6 @@ function insertTimelineDividers(listEl, items) {
   }
 }
 
-/**
- * Returns the .sp-category-list element for the given category string, or null if unknown.
- */
-function getCategoryList(category) {
-  const cat = (category || '').trim();
-  const known = ['Img', 'SNS'];
-  if (!known.includes(cat)) return null;
-  return document.querySelector(`.sp-category-list[data-category-list="${cat}"]`);
-}
 
 function updateCategoryCounts() {}
 
@@ -902,7 +835,6 @@ function showLoginScreen() {
 function showDashboardScreen(user) {
   loginScreen.style.display     = 'none';
   dashboardScreen.style.display = 'flex';
-  setupTabHandlers();
   attachClearButtonHandlers();
 
   // Update avatar
@@ -1127,18 +1059,8 @@ function getTypeIconSVG(type) {
   return icons[type] || icons.webpage;
 }
 
-// ── Card creation (main.html CSS-compatible structure) ────────────────────────
-/**
- * Resolve which canonical layout a card should use.
- * Returns one of: 'image' | 'default'.
- */
-function getCardLayoutKind(item) {
-  const { category, confirmedType } = normalizeItemCategoryAndType(item);
-  if (category === 'Image') return 'image';
-  if (category === 'SNS' && confirmedType === 'contents') return 'image';
-  return 'default';
-}
-
+// === PHASE_SIDEPANEL_UNIFIED_LIST ===
+// ── Card creation (unified image_card grid) ────────────────────────────────────
 function createDataCard(item) {
   const itemId       = item.id || getItemId(item);
   const cardId       = `item-${itemId.replace(/[^a-zA-Z0-9]/g, '_')}`;
@@ -1181,28 +1103,25 @@ function createDataCard(item) {
       </div>
     </div>`;
 
-  const layoutKind = getCardLayoutKind(item);
+  const thumbUrl = getCardThumbnailUrl(item);
   const imgUrlMethod = String(item.img_url_method || '');
   const imgClassExtra = imgUrlMethod === 'screenshot' ? ' is-screenshot' : '';
-  const containerClassExtra = imgUrlMethod === 'favicon' ? ' is-favicon' : '';
   const escContext = (s) =>
     String(s || '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
-  const contextHtml = (() => {
-    if (layoutKind === 'image') {
-      const plat = (item.platform || '').trim();
-      return plat
-        ? `<span class="data-card-content-type">${escContext(plat)}</span>`
-        : '';
-    }
-    const urlText = (item.url || '').trim().replace(/^https?:\/\//, '');
-    return urlText
-      ? `<span class="data-card-url">${escContext(urlText)}</span>`
-      : '';
-  })();
+  const escInfo = (s) =>
+    String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  const plat = (item.platform || '').trim();
+  const urlText = (item.url || '').trim().replace(/^https?:\/\//, '');
+  const contextHtml = plat
+    ? `<span class="data-card-content-type">${escContext(plat)}</span>`
+    : (urlText ? `<span class="data-card-content-type">${escContext(urlText)}</span>` : '');
   const headerHtml = `
     <div class="data-card-header">
       <div class="data-card-context">${contextHtml}</div>
@@ -1210,36 +1129,20 @@ function createDataCard(item) {
       ${deleteBtn}
     </div>`;
 
-  if (layoutKind === 'image') {
-    const imgcontainerHtml = imgUrl ? `
-      <div class="data-card-imgcontainer${containerClassExtra}">
-        <img src="${getProxiedImageUrl(imgUrl)}" alt="${escapedTitle}" class="data-card-image${imgClassExtra}">
-      </div>` : '';
-
-    return `
-      <div id="${cardId}"
-           class="data-card"
-           data-url="${escapedUrl}"
-           data-title="${escapedTitle}"
-           data-img-url="${escapedImgUrl}"
-           data-img-url-dom="${escapedImgUrlDom}"
-           data-item-id="${itemId}"
-           data-doc-id="${item.id || ''}"
-           data-directory-id="${directoryId}">
-        ${headerHtml}
-        <div class="data-card-main">${imgcontainerHtml}</div>
+  let mainContentHtml;
+  if (thumbUrl) {
+    mainContentHtml = `
+      <div class="data-card-imgcontainer">
+        <img src="${getProxiedImageUrl(thumbUrl)}" alt="${escapedTitle}" class="data-card-image${imgClassExtra}">
+      </div>`;
+  } else {
+    mainContentHtml = `
+      <div class="data-card-imgcontainer">
+        <div class="sp-card-placeholder">
+          <span class="sp-card-placeholder-title">${escInfo(displayTitle)}</span>
+        </div>
       </div>`;
   }
-
-  const escInfo = (s) =>
-    String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  const imgcontainerHtml = imgUrl ? `
-    <div class="data-card-imgcontainer${containerClassExtra}">
-      <img src="${getProxiedImageUrl(imgUrl)}" alt="${escapedTitle}" class="data-card-image${imgClassExtra}">
-    </div>` : '';
 
   return `
     <div id="${cardId}"
@@ -1251,15 +1154,11 @@ function createDataCard(item) {
          data-item-id="${itemId}"
          data-doc-id="${item.id || ''}"
          data-directory-id="${directoryId}">
-      ${imgcontainerHtml}
-      <div class="data-card-main">
-        ${headerHtml}
-        <div class="data-card-info">
-          <div class="data-card-extracted-title">${escInfo(displayTitle)}</div>
-        </div>
-      </div>
+      ${headerHtml}
+      <div class="data-card-main">${mainContentHtml}</div>
     </div>`;
 }
+// === END PHASE_SIDEPANEL_UNIFIED_LIST ===
 
 function createCardElement(item, isNew = false) {
   const itemId  = getItemId(item);
@@ -1287,12 +1186,7 @@ function createCardElement(item, isNew = false) {
   wrapper.appendChild(card);
 
   const container = document.createElement('div');
-  container.className = 'card-container';
-  const layoutKind = getCardLayoutKind(item);
-  const containerClass =
-    layoutKind === 'image' ? 'image_card' :
-                             'pages_card';
-  container.classList.add(containerClass);
+  container.className = 'card-container image_card';
 
   if (isNew) {
     container.style.height   = '0px';
@@ -1440,13 +1334,10 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', categor
     return true;
   });
 
+  // === PHASE_SIDEPANEL_UNIFIED_LIST ===
   if (matchingItem) {
-    // Found an existing DataCard. Reorder to top of its category list.
-    const targetTabKey = resolveItemListKey(matchingItem);
-    if (targetTabKey !== _activeTab) {
-      setActiveTab(targetTabKey);
-    }
-    const targetList = getCategoryList(targetTabKey);
+    // Found an existing DataCard. Reorder to top of unified dock list.
+    const targetList = getUnifiedDockList();
     if (targetList) {
       const dataCard = targetList.querySelector(
         `[data-doc-id="${matchingItem.id}"]`
@@ -1503,15 +1394,8 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', categor
   // Add visual indicator that this card is pending
   wrapper.style.opacity = '0.7';
 
-  // If the card belongs to a different tab than the currently active one,
-  // switch to that tab first so the user sees the Optimistic Card appear.
-  const targetTabKey = resolveItemListKey(tempItem);
-  if (targetTabKey !== _activeTab) {
-    setActiveTab(targetTabKey);
-  }
-
-  // Prepend to the top of the routed list box
-  const targetList = getCategoryList(resolveItemListKey(tempItem));
+  // Prepend to the top of the unified dock list
+  const targetList = getUnifiedDockList();
   if (!targetList) return;
   const todayDivider = targetList.querySelector(
     '.sp-timeline-divider[data-timeline-label="Today"]'
@@ -1552,6 +1436,7 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', categor
   attachCardClickHandlers();
   updateClearButtonState();
 }
+// === END PHASE_SIDEPANEL_UNIFIED_LIST ===
 
 function removeOptimisticCard(tempId) {
   const entry = optimisticCards.get(tempId);
@@ -1614,26 +1499,23 @@ function applyOptimisticCardImage(tempId, imgUrl) {
   const main = card.querySelector('.data-card-main');
   if (!main) return;
 
-  // Determine layout from the container class.
-  const cardContainer = card.closest('.card-container');
-  const isImageLayout = cardContainer?.classList.contains('image_card');
+  if (entry.imgUrlMethod === 'favicon') {
+    card.dataset.imgUrl = imgUrl;
+    card.dataset.imgUrlDom = String(entry.imgUrlDom || '').trim();
+    return;
+  }
 
   const wrapper = document.createElement('div');
   wrapper.className = 'data-card-imgcontainer';
-  if (entry.imgUrlMethod === 'favicon') wrapper.classList.add('is-favicon');
   const newImg = document.createElement('img');
   newImg.className = 'data-card-image';
   if (entry.imgUrlMethod === 'screenshot') newImg.classList.add('is-screenshot');
   newImg.alt = String(entry.title || '');
   newImg.src = getProxiedImageUrl(imgUrl);
   wrapper.appendChild(newImg);
-  if (isImageLayout) {
-    // Image layout: imgcontainer goes INSIDE data-card-main
-    main.appendChild(wrapper);
-  } else {
-    // Default layout: imgcontainer goes as a sibling, BEFORE data-card-main
-    main.parentNode?.insertBefore(wrapper, main);
-  }
+  const placeholder = main.querySelector('.sp-card-placeholder');
+  if (placeholder) placeholder.closest('.data-card-imgcontainer')?.remove();
+  main.appendChild(wrapper);
 
   // Reflect on the card's dataset so loadData() comparisons work.
   card.dataset.imgUrl = imgUrl;
@@ -1641,17 +1523,15 @@ function applyOptimisticCardImage(tempId, imgUrl) {
 }
 
 /**
- * Recompute the disabled state of the single clear button. The
- * button reflects the currently-active category. Called whenever
- * card state changes, after tab transitions, and after bulk clear.
+ * Recompute the disabled state of the single clear button for the
+ * unified dock list. Called whenever card state changes and after bulk clear.
  */
 function updateClearButtonState() {
   const btn = document.querySelector('.sp-clear-btn');
   if (!btn) return;
 
-  const list = document.querySelector(
-    `.sp-category-list[data-category-list="${_activeTab}"]`
-  );
+  // === PHASE_SIDEPANEL_UNIFIED_LIST ===
+  const list = getUnifiedDockList();
   if (!list) {
     btn.disabled = true;
     return;
@@ -1660,10 +1540,10 @@ function updateClearButtonState() {
   const hasCards = list.querySelector('.card-container') !== null;
   const hasOptimistic = list.querySelector('.card-container[data-optimistic-card]') !== null;
   const isPending = btn.dataset.clearPending === 'true';
-  const isTransitioning = _isCategoryTransitioning;
 
-  btn.disabled = !hasCards || hasOptimistic || isPending || isTransitioning;
+  btn.disabled = !hasCards || hasOptimistic || isPending;
 }
+// === END PHASE_SIDEPANEL_UNIFIED_LIST ===
 
 /**
  * Ensure the per-category "No clips yet" placeholder is in sync
@@ -1726,7 +1606,8 @@ function syncTimelineDividers(list) {
   }
 }
 
-async function executeClear(categoryKey, list, btn, exitConfirmPending) {
+// === PHASE_SIDEPANEL_UNIFIED_LIST ===
+async function executeClear(list, btn, exitConfirmPending) {
   if (!currentUser) {
     exitConfirmPending();
     return;
@@ -1790,6 +1671,7 @@ async function executeClear(categoryKey, list, btn, exitConfirmPending) {
   // Toast.
   showKcToast(`${docIds.length} clips cleared`, 'success');
 }
+// === END PHASE_SIDEPANEL_UNIFIED_LIST ===
 
 function attachClearButtonHandlers() {
   const bar = document.querySelector('.sp-clear-bar');
@@ -1820,16 +1702,13 @@ function attachClearButtonHandlers() {
     }
   };
 
-  // Expose for setActiveTab to call.
   _clearBarExitConfirmPending = exitConfirmPending;
 
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (btn.disabled) return;
 
-    const list = document.querySelector(
-      `.sp-category-list[data-category-list="${_activeTab}"]`
-    );
+    const list = getUnifiedDockList();
     if (!list) return;
 
     if (!bar.classList.contains('confirm-pending')) {
@@ -1856,8 +1735,8 @@ function attachClearButtonHandlers() {
       return;
     }
 
-    // Second click: execute clear on the active category's list.
-    executeClear(_activeTab, list, btn, exitConfirmPending);
+    // Second click: execute clear on the unified dock list.
+    executeClear(list, btn, exitConfirmPending);
   });
 }
 
@@ -2984,14 +2863,13 @@ function setupDirectoryListDropHandlers() {
 }
 
 // ── Unified drop setup ────────────────────────────────────────────────────────
+// === PHASE_SIDEPANEL_UNIFIED_LIST ===
 function setupUnifiedDropHandlers() {
-  // Attach DnD to each category list independently (same-category reordering only)
-  CATEGORY_ORDER.forEach((cat) => {
-    const list = document.querySelector(`.sp-category-list[data-category-list="${cat}"]`);
-    if (!list || list.dataset.unifiedDnDAttached === 'true') return;
+  const list = getUnifiedDockList();
+  if (list && list.dataset.unifiedDnDAttached !== 'true') {
     list.dataset.unifiedDnDAttached = 'true';
     setupContainerDropHandlers(list, null);
-  });
+  }
 
   // Directory containers
   document.querySelectorAll('.directory-items-container').forEach((container) => {
@@ -3005,6 +2883,7 @@ function setupUnifiedDropHandlers() {
   setupDirectoryHeaderDropHandlers();
   setupDirectoryListDropHandlers();
 }
+// === END PHASE_SIDEPANEL_UNIFIED_LIST ===
 
 // ── renderDirectories ─────────────────────────────────────────────────────────
 function renderDirectories() {
@@ -3155,11 +3034,11 @@ function loadData() {
     }
   }
 
-  // Clear all category lists (preserve animating and optimistic cards)
-  CATEGORY_ORDER.forEach((cat) => {
-    const list = document.querySelector(`.sp-category-list[data-category-list="${cat}"]`);
-    if (!list) return;
-    Array.from(list.children).forEach((child) => {
+  // === PHASE_SIDEPANEL_UNIFIED_LIST ===
+  // Clear unified dock list (preserve animating and optimistic cards)
+  const unifiedList = getUnifiedDockList();
+  if (unifiedList) {
+    Array.from(unifiedList.children).forEach((child) => {
       if (
         child.dataset?.preserveAnimation
         || child.dataset?.optimisticCard
@@ -3167,9 +3046,9 @@ function loadData() {
       const dockCard = child.querySelector?.('.data-card');
       const cid = dockCard?.dataset?.itemId;
       if (cid && preserveItemIds.has(cid)) return;
-      list.removeChild(child);
+      unifiedList.removeChild(child);
     });
-  });
+  }
 
   itemsWithoutDirectory.forEach((item) => {
     const itemId = getItemId(item);
@@ -3228,24 +3107,18 @@ function loadData() {
             // message hasn't arrived. Build the imgcontainer using the
             // server URL directly.
             const main = existingCard.querySelector('.data-card-main');
-            if (main) {
-              const cardContainer = existingCard.closest('.card-container');
-              const isImageLayout = cardContainer?.classList.contains('image_card');
+            if (main && !shouldUsePlaceholder(item)) {
               const method = String(item.img_url_method || '');
               const wrapper = document.createElement('div');
               wrapper.className = 'data-card-imgcontainer';
-              if (method === 'favicon') wrapper.classList.add('is-favicon');
               const newImg = document.createElement('img');
               newImg.className = 'data-card-image';
               if (method === 'screenshot') newImg.classList.add('is-screenshot');
               newImg.alt = String(item.title || 'Untitled');
               newImg.src = getProxiedImageUrl(item.img_url);
               wrapper.appendChild(newImg);
-              if (isImageLayout) {
-                main.appendChild(wrapper);
-              } else {
-                main.parentNode?.insertBefore(wrapper, main);
-              }
+              main.querySelector('.sp-card-placeholder')?.closest('.data-card-imgcontainer')?.remove();
+              main.appendChild(wrapper);
             }
           }
           // else: visible img already present (current pre-12b flow OR
@@ -3313,8 +3186,7 @@ function loadData() {
           kcCardItemByEl.set(existingCard, itemToRender ?? item);
           const existingContainer = existingCard.closest('.card-container');
           if (existingContainer) {
-            const targetList = getCategoryList(resolveItemListKey(itemToRender ?? item));
-            targetList?.appendChild(existingContainer);
+            getUnifiedDockList()?.appendChild(existingContainer);
           }
           return;
         }
@@ -3322,17 +3194,13 @@ function loadData() {
     }
 
     const { container, wrapper, card } = createCardElement(itemToRender, isNew);
-    getCategoryList(resolveItemListKey(itemToRender ?? item))?.appendChild(container);
+    getUnifiedDockList()?.appendChild(container);
     displayedItemIds.add(itemId);
     card.dataset.handlerAttached = 'false';
     if (isNew) animateEntrance(container, wrapper);
   });
 
-  // Per-category empty state
-  CATEGORY_ORDER.forEach((cat) => {
-    const list = document.querySelector(`.sp-category-list[data-category-list="${cat}"]`);
-    ensureEmptyState(list);
-  });
+  ensureEmptyState(getUnifiedDockList());
 
   updateClearButtonState();
 
@@ -3342,15 +3210,12 @@ function loadData() {
 
   updateCategoryCounts();
 
-  // ── Timeline dividers ────────────────────────────────────────
-  CATEGORY_ORDER.forEach((cat) => {
-    const listEl = getCategoryList(cat);
-    if (!listEl) return;
-    const itemsForList = itemsWithoutDirectory.filter(
-      (it) => resolveItemListKey(it) === cat
-    );
-    insertTimelineDividers(listEl, itemsForList);
-  });
+  // ── Timeline dividers (unified dock list) ─────────────────────
+  const dockListEl = getUnifiedDockList();
+  if (dockListEl) {
+    insertTimelineDividers(dockListEl, itemsWithoutDirectory);
+  }
+  // === END PHASE_SIDEPANEL_UNIFIED_LIST ===
 
 }
 

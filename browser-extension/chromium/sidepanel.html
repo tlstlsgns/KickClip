@@ -196,49 +196,6 @@
       display: none;
     }
     /* === END PHASE_SHORTCUT_RECORDER === */
-    #sp-filter {
-      display: flex;
-      align-items: center;
-      padding: 6px 10px;
-      border-bottom: 1px solid var(--border);
-      background: #fff;
-      flex-shrink: 0;
-      width: 100%;
-      box-sizing: border-box;
-    }
-
-    /* Tab bar */
-    #sp-tab-bar {
-      display: flex;
-      gap: 4px;
-      flex: 1;
-    }
-
-    .sp-tab {
-      flex: 1;
-      padding: 5px 0;
-      font-family: 'Roboto', sans-serif;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      background: none;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      letter-spacing: 0.03em;
-      transition: color 0.15s, background 0.15s;
-    }
-
-    .sp-tab:hover {
-      background: var(--accent-10);
-      color: var(--accent);
-    }
-
-    .sp-tab.active {
-      background: var(--accent-10);
-      color: var(--accent);
-    }
-
     #sp-user-section {
       display: flex;
       align-items: center;
@@ -559,26 +516,16 @@
       flex-direction: column;
     }
 
+    /* === PHASE_SIDEPANEL_UNIFIED_LIST === */
     #sp-itemlist-wrap {
       display: flex;
-      flex-direction: row;
-      width: 400%;
-      flex: 1;
-      min-height: 0;
-      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      transform: translateX(0%);
-    }
-
-    /* ── Category sections ── */
-    .sp-category-section {
-      width: 25%;
-      flex-shrink: 0;
-      display: flex;
       flex-direction: column;
+      flex: 1;
       min-height: 0;
       overflow: hidden;
     }
-    .sp-category-list {
+
+    #sp-unified-list {
       flex: 1;
       display: flex;
       flex-wrap: wrap;
@@ -592,6 +539,31 @@
       opacity: 1;
       background: var(--bg-primary);
     }
+
+    .sp-card-placeholder {
+      width: 100%;
+      height: 130px;
+      background: #f3f4f6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      box-sizing: border-box;
+      border-radius: var(--corner-extra-small);
+    }
+    .sp-card-placeholder-title {
+      font-family: 'Roboto', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      color: #6b7280;
+      text-align: center;
+      line-height: 1.4;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
+    /* === END PHASE_SIDEPANEL_UNIFIED_LIST === */
 
     /* ── Timeline dividers ── */
     .sp-timeline-divider {
@@ -741,87 +713,6 @@
 
     .card-container.image_card .data-card-image {
       object-position: center;
-    }
-
-    /* ── pages_card: default (portrait) layout — horizontal flow ── */
-    .card-container.pages_card .data-card {
-      flex-direction: row;
-    }
-
-    /* imgcontainer: fixed 4:3 aspect, fills card height */
-    .card-container.pages_card .data-card-imgcontainer {
-      height: 100%;
-      width: auto;
-      aspect-ratio: 4 / 3;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex: none;
-    }
-
-    /* favicon variant: image is contain-fit, natural width, centered */
-    .card-container.pages_card .data-card-imgcontainer.is-favicon .data-card-image {
-      width: auto;
-      height: 100%;
-      object-fit: contain;
-      margin: 0 auto;
-    }
-
-    /* screenshot variant: image is anchored top-left so headers stay visible */
-    .card-container.pages_card .data-card-image.is-screenshot {
-      object-position: top left;
-    }
-
-    /* data-card-main fills remaining horizontal space */
-    .card-container.pages_card .data-card-main {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-width: 0;
-      min-height: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    /* data-card-info: title + description stacked */
-    .card-container.pages_card .data-card-info {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      padding: 4px 8px 6px;
-      width: 100%;
-      min-width: 0;
-      flex: 1;
-    }
-
-    /* title — single line with ellipsis */
-    .card-container.pages_card .data-card-extracted-title {
-      font-family: 'Roboto', sans-serif;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-primary);
-      line-height: 1.35;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      width: 100%;
-      min-width: 0;
-    }
-
-    /* description */
-    .card-container.pages_card .data-card-extracted-description {
-      font-family: 'Roboto', sans-serif;
-      font-size: 10px;
-      font-weight: 400;
-      color: rgba(0, 0, 0, 0.45);
-      line-height: 1.4;
-      overflow: hidden;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      width: 100%;
-      min-width: 0;
     }
 
     /* Text content */
@@ -1261,14 +1152,6 @@
         </label>
       </div>
 
-      <!-- Filter bar -->
-      <div id="sp-filter">
-        <div id="sp-tab-bar">
-          <button class="sp-tab active" data-tab="Img">Img</button>
-          <button class="sp-tab" data-tab="SNS">SNS</button>
-        </div>
-      </div>
-
       <!-- Directory list -->
       <div id="sp-directory-list"></div>
 
@@ -1289,12 +1172,12 @@
         </div>
       </div>
 
-      <!-- Main item list: category sections -->
+      <!-- === PHASE_SIDEPANEL_UNIFIED_LIST === Main item list: unified dock grid === -->
       <div id="sp-itemlist-clip">
         <div class="sp-clear-bar">
           <span class="sp-clear-confirm-text" style="display:none;"></span>
           <button type="button" class="sp-clear-btn" disabled
-                  aria-label="Clear all clips in active category">
+                  aria-label="Clear all clips in dock list">
             <svg class="sp-clear-icon-trash" viewBox="0 0 24 24"
                  fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round"
@@ -1314,14 +1197,10 @@
           </button>
         </div>
         <div id="sp-itemlist-wrap">
-          <div class="sp-category-section" data-category="Img">
-            <div class="sp-category-list" data-category-list="Img"></div>
-          </div>
-          <div class="sp-category-section" data-category="SNS">
-            <div class="sp-category-list" data-category-list="SNS"></div>
-          </div>
+          <div id="sp-unified-list" class="sp-unified-list"></div>
         </div>
       </div>
+      <!-- === END PHASE_SIDEPANEL_UNIFIED_LIST === -->
 
     </div>
   </div>
