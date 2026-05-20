@@ -1654,10 +1654,13 @@ function detectFacebookFallback(root, existingElements = new Set()) {
       const identitySig = getElementSignature(unit) || 'DIV::A:fb_feedunit_fallback';
       const structureSig = getInternalStructure(unit, 3) || 'fb_fallback_structure';
       const signature = `FB_FALLBACK::${pagelet || 'unknown'}::${identitySig}::${structureSig}`;
-      // === PHASE27A_TYPE_B_STRICT (facebook fallback) ===
+      // === PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
+      // Type B no longer requires a dominant image. Text-only SNS posts are
+      // eligible when structural and share-button criteria pass. Dominant
+      // images still populate seedImages for hover activation; text-only
+      // posts may have an empty seedImages set.
       const seedImages = findDominantImagesInElement(unit);
-      if (!seedImages.size) continue;
-      // === END PHASE27A_TYPE_B_STRICT ===
+      // === END PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
       // === PHASE27E_HOVER_COMPANIONS (Type B facebook fallback) ===
       const hoverCompanions = new Set();
       try {
@@ -2331,18 +2334,17 @@ export async function detectItemMaps(root = document) {
         if (!(await isMeaningfulItemMap(passed, evidenceType))) continue;
         for (const el of passed) {
           const parts = identitySig.split('::');
-          // === PHASE27A_TYPE_B_STRICT ===
-          // Phase 27 B-β-1: Type B activation is now image-keyed.
-          // A Type B candidate must contain at least one dominant
-          // <img>. Candidates with no dominant image (e.g.,
-          // text-only posts) are excluded so they cannot be
-          // activated via image-hover.
+          // === PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
+          // Type B no longer requires a dominant image. Text-only SNS posts
+          // (e.g., text-only tweets, Facebook status posts) are eligible
+          // candidates when structural and share-button criteria pass.
+          // Dominant images still populate seedImages for image-hover
+          // activation; text-only posts may have an empty seedImages set.
           let seedImages = new Set();
           if (evidenceType === EVIDENCE_TYPE_INTERACTION) {
             seedImages = findDominantImagesInElement(el);
-            if (!seedImages.size) continue;
           }
-          // === END PHASE27A_TYPE_B_STRICT ===
+          // === END PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
           // === PHASE27E_HOVER_COMPANIONS (Type B primary) ===
           const hoverCompanions = new Set();
           try {
@@ -2492,10 +2494,11 @@ export async function detectItemMaps(root = document) {
             if (Math.abs(candShareDepth - seedShareDepth) > 2) continue;
 
             const candidateIdentity = getElementSignature(cand) || seed.identitySignature || '';
-            // === PHASE27A_TYPE_B_STRICT (sibling recovery) ===
+            // === PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
+            // Dominant image no longer gates Type B sibling recovery; seedImages
+            // may be empty for text-only posts (same policy as main loop).
             const seedImages = findDominantImagesInElement(cand);
-            if (!seedImages.size) continue;
-            // === END PHASE27A_TYPE_B_STRICT ===
+            // === END PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
             // === PHASE27E_HOVER_COMPANIONS (Type B sibling recovery) ===
             const hoverCompanions = new Set();
             try {
