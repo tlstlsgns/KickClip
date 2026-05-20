@@ -3381,12 +3381,8 @@ function mountLifecycle() {
 // (updateCoreSelectionFromTarget).
 // === END PHASE27B_REMOVED_GLOBAL ===
 
-// Do not run in Electron-based desktop apps (e.g. Claude Desktop, VS Code, Notion).
-// These apps embed a Chromium engine but are not regular browser tabs —
-// KickClip should only operate in a real browser context.
-const _isElectronApp = typeof navigator !== 'undefined' &&
-  navigator.userAgent.includes('Electron');
-
-if (!_isElectronApp) {
-  checkKcUserAndInit();
-}
+// === PHASE_AI_DOMAIN_UNLOCK ===
+// Previously gated on !_isElectronApp to skip Electron-based desktop apps.
+// Restriction removed; see content-loader.js for full rationale.
+checkKcUserAndInit();
+// === END PHASE_AI_DOMAIN_UNLOCK ===

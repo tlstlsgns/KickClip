@@ -8,19 +8,17 @@ if (window.__kickclipContentScriptLoaderLoaded) {
 } else {
   window.__kickclipContentScriptLoaderLoaded = true;
 
-  // Do not run in Electron-based desktop apps (e.g. Claude Desktop, VS Code, Notion).
-  // These apps embed a Chromium engine but are not regular browser tabs —
-  // KickClip should only operate in a real browser context.
-  const _isElectronApp = typeof navigator !== 'undefined' &&
-    navigator.userAgent.includes('Electron');
+  // === PHASE_AI_DOMAIN_UNLOCK ===
+  // Previously gated on !_isElectronApp to skip Electron-based desktop apps
+  // (Claude Desktop, VS Code, Notion). Restriction removed — KickClip is
+  // allowed to attempt initialization in all contexts. In practice, Chrome
+  // extensions are not loaded by Electron apps regardless of this guard,
+  // so removing it has no effective impact on real Electron environments.
+  const src = chrome.runtime.getURL('coreEntry.js');
 
-  if (!_isElectronApp) {
-    // Import the ESM entrypoint from the extension origin
-    const src = chrome.runtime.getURL('coreEntry.js');
-
-    import(src).catch(() => {
-      // Failed to import coreEntry.js
-    });
-  }
+  import(src).catch(() => {
+    // Failed to import coreEntry.js
+  });
+  // === END PHASE_AI_DOMAIN_UNLOCK ===
 }
 

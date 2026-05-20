@@ -32,11 +32,6 @@
       "matches": [
         "<all_urls>"
       ],
-      "exclude_matches": [
-        "https://claude.ai/*",
-        "https://chatgpt.com/*",
-        "https://gemini.google.com/*"
-      ],
       "js": [
         "config.js",
         "content-loader.js"
