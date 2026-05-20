@@ -1118,6 +1118,28 @@ function findDominantImagesInElement(container) {
   return out;
 }
 
+// === PHASE_TYPE_B_DE_INTEGRATION ===
+// Significant-image collection scoped to a container element. Reuses
+// the same filtering policy as filterSignificantImages (size, ratio,
+// nav/map/visibility gates) — so a Type B post's seedImages cover the
+// same image set that Type D/E would otherwise capture standalone.
+//
+// Returns a Set<HTMLImageElement> (consistent with findDominantImagesInElement).
+function findSignificantImagesInElement(container) {
+  const out = new Set();
+  try {
+    if (!container || container.nodeType !== 1) return out;
+    const significants = filterSignificantImages(container);
+    for (const entry of significants) {
+      if (entry?.img) out.add(entry.img);
+    }
+  } catch (_) {
+    // defensive
+  }
+  return out;
+}
+// === END PHASE_TYPE_B_DE_INTEGRATION ===
+
 /**
  * Phase 21: shared significant-image pool for Type D and Type E.
  * Threshold is viewport-independent: Math.max(80, cappedRootFontSize * 2),
@@ -1659,7 +1681,9 @@ function detectFacebookFallback(root, existingElements = new Set()) {
       // eligible when structural and share-button criteria pass. Dominant
       // images still populate seedImages for hover activation; text-only
       // posts may have an empty seedImages set.
-      const seedImages = findDominantImagesInElement(unit);
+      // === PHASE_TYPE_B_DE_INTEGRATION ===
+      const seedImages = findSignificantImagesInElement(unit);
+      // === END PHASE_TYPE_B_DE_INTEGRATION ===
       // === END PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
       // === PHASE27E_HOVER_COMPANIONS (Type B facebook fallback) ===
       const hoverCompanions = new Set();
@@ -2342,7 +2366,9 @@ export async function detectItemMaps(root = document) {
           // activation; text-only posts may have an empty seedImages set.
           let seedImages = new Set();
           if (evidenceType === EVIDENCE_TYPE_INTERACTION) {
-            seedImages = findDominantImagesInElement(el);
+            // === PHASE_TYPE_B_DE_INTEGRATION ===
+            seedImages = findSignificantImagesInElement(el);
+            // === END PHASE_TYPE_B_DE_INTEGRATION ===
           }
           // === END PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
           // === PHASE27E_HOVER_COMPANIONS (Type B primary) ===
@@ -2378,14 +2404,33 @@ export async function detectItemMaps(root = document) {
         }
       }
     }
+    // === PHASE_TYPE_B_DE_INTEGRATION ===
+    // Prefer Type B over Type D on same DOM element when platform is
+    // in TYPE_B_PLATFORMS. SNS posts may match D card heuristics, but
+    // the post-level B candidate is the intended unit.
     const uniqByEl = new Map();
     const deduped = [];
+    const isSnsPlatform = TYPE_B_PLATFORMS.has(getCurrentPlatform());
     for (const item of candidates) {
       if (!item?.element) continue;
-      if (uniqByEl.has(item.element)) continue;
+      const existing = uniqByEl.get(item.element);
+      if (existing) {
+        if (
+          isSnsPlatform &&
+          existing.evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR &&
+          item.evidenceType === EVIDENCE_TYPE_INTERACTION
+        ) {
+          const idx = deduped.indexOf(existing);
+          if (idx >= 0) deduped.splice(idx, 1);
+          uniqByEl.set(item.element, item);
+          deduped.push(item);
+        }
+        continue;
+      }
       uniqByEl.set(item.element, item);
       deduped.push(item);
     }
+    // === END PHASE_TYPE_B_DE_INTEGRATION ===
 
     const recovered = [...deduped];
 
@@ -2497,7 +2542,9 @@ export async function detectItemMaps(root = document) {
             // === PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
             // Dominant image no longer gates Type B sibling recovery; seedImages
             // may be empty for text-only posts (same policy as main loop).
-            const seedImages = findDominantImagesInElement(cand);
+            // === PHASE_TYPE_B_DE_INTEGRATION ===
+            const seedImages = findSignificantImagesInElement(cand);
+            // === END PHASE_TYPE_B_DE_INTEGRATION ===
             // === END PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
             // === PHASE27E_HOVER_COMPANIONS (Type B sibling recovery) ===
             const hoverCompanions = new Set();
@@ -2550,13 +2597,27 @@ export async function detectItemMaps(root = document) {
     let merged = [...expandedFiltered, ...fallbackItems];
 
     // De-duplicate by element after fallback merge.
+    // === PHASE_TYPE_B_DE_INTEGRATION ===
     const dedupMergedByEl = new Map();
+    const isSnsPlatformMerged = TYPE_B_PLATFORMS.has(getCurrentPlatform());
     for (const item of merged) {
       const el = item?.element;
-      if (!el || dedupMergedByEl.has(el)) continue;
+      if (!el) continue;
+      const existing = dedupMergedByEl.get(el);
+      if (existing) {
+        if (
+          isSnsPlatformMerged &&
+          existing.evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR &&
+          item.evidenceType === EVIDENCE_TYPE_INTERACTION
+        ) {
+          dedupMergedByEl.set(el, item);
+        }
+        continue;
+      }
       dedupMergedByEl.set(el, item);
     }
     merged = Array.from(dedupMergedByEl.values());
+    // === END PHASE_TYPE_B_DE_INTEGRATION ===
 
     const finalFiltered = merged.filter((item) => {
       if (!item?.element) return false;
@@ -2578,6 +2639,78 @@ export async function detectItemMaps(root = document) {
     }
 
     const allItems = [...finalFiltered];
+
+    // === PHASE_TYPE_B_DE_INTEGRATION ===
+    // Type D ↔ Type B containment exclusion (mirrors Type E ↔ B guard).
+    // Drop D candidates whose card or seedImages lie inside a final B element.
+    // Merge dropped D hoverCompanions into the containing B.
+    {
+      const bElements = [];
+      for (const x of allItems) {
+        if (x?.evidenceType === EVIDENCE_TYPE_INTERACTION && x?.element) {
+          bElements.push(x);
+        }
+      }
+      if (bElements.length) {
+        const filteredItems = [];
+        for (const item of allItems) {
+          if (item?.evidenceType !== EVIDENCE_TYPE_IMAGE_ANCHOR) {
+            filteredItems.push(item);
+            continue;
+          }
+          const dEl = item.element;
+          if (!dEl) {
+            filteredItems.push(item);
+            continue;
+          }
+          let containingB = null;
+          for (const b of bElements) {
+            const bEl = b.element;
+            if (!bEl) continue;
+            if (bEl === dEl) {
+              containingB = b;
+              break;
+            }
+            if (typeof bEl.contains === 'function' && bEl.contains(dEl)) {
+              containingB = b;
+              break;
+            }
+            if (typeof dEl.contains === 'function' && dEl.contains(bEl)) {
+              containingB = b;
+              break;
+            }
+          }
+          if (!containingB && item.seedImages instanceof Set) {
+            for (const img of item.seedImages) {
+              if (!img) continue;
+              for (const b of bElements) {
+                const bEl = b.element;
+                if (bEl && typeof bEl.contains === 'function' && bEl.contains(img)) {
+                  containingB = b;
+                  break;
+                }
+              }
+              if (containingB) break;
+            }
+          }
+          if (!containingB) {
+            filteredItems.push(item);
+            continue;
+          }
+          if (item.hoverCompanions instanceof Set) {
+            if (!(containingB.hoverCompanions instanceof Set)) {
+              containingB.hoverCompanions = new Set();
+            }
+            for (const node of item.hoverCompanions) {
+              containingB.hoverCompanions.add(node);
+            }
+          }
+        }
+        allItems.length = 0;
+        allItems.push(...filteredItems);
+      }
+    }
+    // === END PHASE_TYPE_B_DE_INTEGRATION ===
 
     // === TYPED_REDESIGN_PHASE20_TYPEE — Type E fallback image merge ===
     // Type E now consumes the same significant-image pool as Type D and
