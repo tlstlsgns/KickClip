@@ -776,29 +776,38 @@ function isImageDominantInCoreItem(imageRect, coreRect) {
   }
 }
 
+// === PHASE_HEADER_NAV_RELAX ===
+// Site-level navigation headers are <body> > <header>. All other <header>
+// elements (sectional/article headers, hero headers, content-section headers
+// nested under <main>, <motion.div>, etc.) are treated as content, not nav, and
+// should not exclude their inner images from Type D / E ItemMap detection.
+//
+// This replaces the prior PHASE_SECTIONAL_HEADER_ALLOW heuristic
+// (article/main-only) with a broader and more consistent body-direct-child
+// rule. Other nav signals — role=banner / contentinfo / navigation — and
+// <nav>, <footer> tags are NOT relaxed; site nav can use those legitimately
+// regardless of DOM depth.
+function isSiteLevelNavHeader(el) {
+  return el?.tagName === 'HEADER' && el?.parentElement === document.body;
+}
+// === END PHASE_HEADER_NAV_RELAX ===
+
 function isInsideNavLikeAncestor(el) {
   try {
     let cur = el?.parentElement || null;
     while (cur && cur !== document.body) {
       const tag = String(cur.tagName || '').toUpperCase();
-      if (TYPED_NAV_TAGS.has(tag)) {
-        // === PHASE_SECTIONAL_HEADER_ALLOW ===
-        // HTML5 distinguishes site-level <header> (page banner, usually a
-        // direct child of <body>) from sectional <header> (article title,
-        // byline, lead image — a child of <article> or <main>). The
-        // sectional case is semantically content, not navigation, and
-        // its lead images should be eligible for clipping.
-        //
-        // Treat <header> inside <article>/<main> as non-nav and keep
-        // walking. <header> elsewhere (and <footer>/<nav> anywhere)
-        // continues to count as nav.
-        if (tag === 'HEADER' && cur.closest('article, main')) {
-          cur = cur.parentElement;
-          continue;
-        }
-        // === END PHASE_SECTIONAL_HEADER_ALLOW ===
+      // === PHASE_HEADER_NAV_RELAX ===
+      // HEADER tag matches as nav only when it's the site-level header
+      // (<body> > <header>). All other headers are content; continue walking.
+      // FOOTER and NAV still match unconditionally.
+      if (tag === 'HEADER') {
+        if (isSiteLevelNavHeader(cur)) return true;
+        // sectional / hero / content header — not nav; keep walking
+      } else if (TYPED_NAV_TAGS.has(tag)) {
         return true;
       }
+      // === END PHASE_HEADER_NAV_RELAX ===
       const role = String(cur.getAttribute?.('role') || '').toLowerCase().trim();
       if (TYPED_NAV_ROLES.has(role)) return true;
       cur = cur.parentElement;
@@ -1834,9 +1843,18 @@ async function detectTypeDItemMaps(root = document) {
       const parent = cur.parentElement;
       if (!parent || parent === document.body || parent === document.documentElement) break;
 
-      // Nav guard
+      // === PHASE_HEADER_NAV_RELAX ===
+      // Nav guard: HEADER tag stops the walk only when it's the site-level
+      // header (<body> > <header>). Other headers are content; allow the
+      // walk to continue.
       const parentTagU = String(parent.tagName || '').toUpperCase();
-      if (TYPED_NAV_TAGS.has(parentTagU)) break;
+      if (parentTagU === 'HEADER') {
+        if (isSiteLevelNavHeader(parent)) break;
+        // sectional / hero / content header — not nav; do not break
+      } else if (TYPED_NAV_TAGS.has(parentTagU)) {
+        break;
+      }
+      // === END PHASE_HEADER_NAV_RELAX ===
       const parentRole = String(parent.getAttribute?.('role') || '').toLowerCase().trim();
       if (TYPED_NAV_ROLES.has(parentRole)) break;
 
