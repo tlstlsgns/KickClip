@@ -375,14 +375,18 @@ export async function saveItemViaDownloads(item) {
       if (!imgUrl) {
         return { ok: false, reason: 'generic', message: 'No image URL' };
       }
-      // === PHASE27G_FALLBACK_ARG ===
+      // === PHASE_UPLOAD_FALLBACK_B64 ===
+      // img_url fetch failure: fall back to img_thumbnail_b64 (the inline
+      // 400x400 JPEG data URL saved at clip time — same image as clipboard,
+      // CORS-immune). Replaces former img_url_dom fallback, which was less
+      // reliable (DOM extraction often missed lazy-loaded images).
       const imgResult = await fetchImageAsBlob(
         imgUrl,
-        (item.img_url_dom || '').trim()
+        (item.img_thumbnail_b64 || '').trim()
       );
       blob = imgResult.blob;
       usedFallback = imgResult.usedFallback;
-      // === END PHASE27G_FALLBACK_ARG ===
+      // === END PHASE_UPLOAD_FALLBACK_B64 ===
       ext = inferImageExtension(imgUrl, blob);
     } else {
       const md = formatItemAsMarkdown(item);
@@ -513,14 +517,18 @@ export async function writeItemToHandle(handle, item) {
       if (!imgUrl) {
         return { ok: false, reason: 'generic', message: 'No image URL' };
       }
-      // === PHASE27G_FALLBACK_ARG ===
+      // === PHASE_UPLOAD_FALLBACK_B64 ===
+      // img_url fetch failure: fall back to img_thumbnail_b64 (the inline
+      // 400x400 JPEG data URL saved at clip time — same image as clipboard,
+      // CORS-immune). Replaces former img_url_dom fallback, which was less
+      // reliable (DOM extraction often missed lazy-loaded images).
       const imgResult = await fetchImageAsBlob(
         imgUrl,
-        (item.img_url_dom || '').trim()
+        (item.img_thumbnail_b64 || '').trim()
       );
       blob = imgResult.blob;
       usedFallback = imgResult.usedFallback;
-      // === END PHASE27G_FALLBACK_ARG ===
+      // === END PHASE_UPLOAD_FALLBACK_B64 ===
       ext = inferImageExtension(imgUrl, blob);
     } else {
       const md = formatItemAsMarkdown(item);
@@ -612,7 +620,17 @@ export async function buildDriveUploadPayload(item) {
       if (!imgUrl) {
         return { ok: false, reason: 'generic', message: 'No image URL' };
       }
-      blob = (await fetchImageAsBlob(imgUrl, (item.img_url_dom || '').trim())).blob;
+      // === PHASE_UPLOAD_FALLBACK_B64 ===
+      // img_url fetch failure: fall back to img_thumbnail_b64 (the inline
+      // 400x400 JPEG data URL saved at clip time — same image as clipboard,
+      // CORS-immune). Replaces former img_url_dom fallback, which was less
+      // reliable (DOM extraction often missed lazy-loaded images).
+      const imgResult = await fetchImageAsBlob(
+        imgUrl,
+        (item.img_thumbnail_b64 || '').trim()
+      );
+      blob = imgResult.blob;
+      // === END PHASE_UPLOAD_FALLBACK_B64 ===
       ext = inferImageExtension(imgUrl, blob);
       mimeType = blob.type || (ext === 'jpg' ? 'image/jpeg' : `image/${ext}`);
     } else {
