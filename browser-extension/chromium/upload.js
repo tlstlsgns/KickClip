@@ -189,7 +189,6 @@ function formatItemAsMarkdown(item) {
   const created = toDateFromCreated(item);
   const createdIso = created.toISOString();
   const category = String(item.category || '').trim();
-  const confirmed = String(item.confirmed_type || item.confirmedType || '').trim();
   const platform = String(item.platform || '').trim();
   const imgUrl = String(item.img_url || '').trim();
 
@@ -198,9 +197,6 @@ function formatItemAsMarkdown(item) {
   fm.push(`url: "${escapeYamlDoubleQuoted(url)}"`);
   fm.push(`created: "${escapeYamlDoubleQuoted(createdIso)}"`);
   fm.push(`category: "${escapeYamlDoubleQuoted(category)}"`);
-  if (category === 'SNS' && confirmed) {
-    fm.push(`confirmed_type: "${escapeYamlDoubleQuoted(confirmed)}"`);
-  }
   if (platform) {
     fm.push(`platform: "${escapeYamlDoubleQuoted(platform)}"`);
   }

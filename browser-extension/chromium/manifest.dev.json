@@ -51,8 +51,6 @@
         "assets/icons/icon_32.png",
         "assets/icons/icon_48.png",
         "assets/icons/icon_128.png",
-        "assets/favicons/google.png",
-        "assets/favicons/naver.png",
         "brandConfig.js",
         "stateLite.js",
         "shortcutStore.js",

@@ -689,14 +689,13 @@ function refreshCoreItemMetadata(coreItem) {
     if (syncedMeta.activeHoverUrl) {
       try {
         const htmlCtx = extractCoreItemHtmlContext(coreItem);
-        const { category, platform, confirmedType } = detectItemCategory(
+        const { category, platform } = detectItemCategory(
           syncedMeta.activeHoverUrl,
           window.location.href,
           htmlCtx
         );
         syncedMeta = { ...syncedMeta, category };
         if (platform) syncedMeta = { ...syncedMeta, platform };
-        if (confirmedType) syncedMeta = { ...syncedMeta, confirmedType };
       } catch (e) {}
     }
 
@@ -734,7 +733,6 @@ function refreshCoreItemMetadata(coreItem) {
           url: String(state.activeHoverUrl || '').trim(),
           imageUrl: String(syncedMeta?.image?.url || '').trim(),
           category: String(syncedMeta?.category || '').trim(),
-          confirmedType: String(syncedMeta?.confirmedType || '').trim(),
           title: String(syncedMeta?.title || '').trim(),
           platform: String(syncedMeta?.platform || '').trim(),
           pageUrl: String(window.location.href || '').trim(),
@@ -1117,14 +1115,13 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   if (syncedMeta.activeHoverUrl) {
     try {
       const htmlCtx = extractCoreItemHtmlContext(coreItem);
-      const { category, platform, confirmedType } = detectItemCategory(
+      const { category, platform } = detectItemCategory(
         syncedMeta.activeHoverUrl,
         window.location.href,
         htmlCtx
       );
       syncedMeta = { ...syncedMeta, category };
       if (platform) syncedMeta = { ...syncedMeta, platform };
-      if (confirmedType) syncedMeta = { ...syncedMeta, confirmedType };
     } catch (e) {}
   }
 
@@ -1135,8 +1132,7 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   // which cannot reliably infer a category and typically returns
   // undefined. Per Phase 27f user decision, Type E saves are
   // always category: 'Image'. Override unconditionally.
-  // Note: platform / confirmedType are left as-is so any genuine
-  // signal detectItemCategory produced is preserved.
+  // Note: platform from detectItemCategory is preserved when set.
   if (evidenceType === 'E') {
     syncedMeta = { ...syncedMeta, category: 'Image' };
   }
@@ -1259,7 +1255,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         url: String(syncedMeta?.activeHoverUrl || '').trim(),
         imageUrl: String(syncedMeta?.image?.url || '').trim(),
         category: String(syncedMeta?.category || '').trim(),
-        confirmedType: String(syncedMeta?.confirmedType || '').trim(),
         title: String(syncedMeta?.title || '').trim(),
         platform: String(syncedMeta?.platform || '').trim(),
         pageUrl: String(window.location.href || '').trim(),
@@ -1653,20 +1648,6 @@ async function saveActiveCoreItem(request = {}) {
       ? youtubeThumbnailUrl
       : String(request?.img_url || freshImage?.url || '').trim();
 
-    // === D3: image-less silent guard ===
-    // CoreItem is active but no image is resolvable at clip time:
-    //   - extractImageFromCoreItem() yielded nothing (cached or fresh),
-    //   - request.img_url (iframe-relay path) is empty,
-    //   - and the URL is not a YouTube watch/short URL (whose thumbnail
-    //     would always be present via youtubeThumbnailUrl).
-    // KickClip now clips only image-bearing CoreItems and SNS posts.
-    // Return silently — no clipboard, no shutter, no optimistic card,
-    // no server fetch — so the user sees nothing happen, mirroring the
-    // 'no-core-item' early-return shape above.
-    if (!imgUrl) {
-      return { success: false, reason: 'no-image' };
-    }
-
     // Step 1: hide CoreHighlight + StatusBadge for screenshot.
     // Skipped in relay mode — iframe owns the visible UI.
     const coreOverlayEl = !isIframeRelay
@@ -1683,103 +1664,9 @@ async function saveActiveCoreItem(request = {}) {
     if (coreOverlayEl) { coreOverlayEl.style.transition = ''; coreOverlayEl.style.opacity = '0'; }
     if (coreBadgeEl)   { coreBadgeEl.style.transition = '';   coreBadgeEl.style.opacity = '0'; }
 
-    // Reflects whether extractImageFromCoreItem() produced a result —
-    // independent of which URL is ultimately used as img_url.
-    const isExtractedImg = !!(meta?.image?.url && String(meta.image.url).trim().length > 0);
-
     // CoreItem saves never capture a screenshot — just wait for repaint.
     await waitForRepaint();
     await new Promise((resolve) => setTimeout(resolve, 32));
-
-    // When no image was extracted from the CoreItem, resolve the
-    // best available favicon URL from the page DOM.
-    // Priority:
-    //   1. <link rel="apple-touch-icon">          — 180×180, high quality
-    //   2. <link rel="icon"> with largest sizes    — site-specified HD icon
-    //   3. <link rel="icon"> or "shortcut icon"    — generic icon fallback
-    //   4. {origin}/apple-touch-icon.png           — same-origin direct URL
-    //   5. {origin}/favicon.ico                    — last resort
-    // All sources are either DOM-read or same-origin, so server-side
-    // IP blocking and CORS restrictions do not apply.
-    const faviconImgUrl = imgUrl || (() => {
-      try {
-        // In an iframe the content script runs in the iframe's document,
-        // which has no <link> icon tags. Derive the correct page origin
-        // from the relayed parent page URL instead of window.location.
-        const isInIframe = IS_IFRAME || window.self !== window.top;
-        const pageUrl = meta?._pageUrl || window.location.href;
-        const origin = (() => {
-          try { return new URL(pageUrl).origin; } catch (e) { return window.location.origin; }
-        })();
-
-        // 0. Custom bundled assets for known domains — checked first,
-        // regardless of iframe context. Keyed by service name and
-        // matched against any subdomain or TLD variant of that name.
-        const CUSTOM_FAVICON_MAP = {
-          'google': 'assets/favicons/google.png',
-          'naver':  'assets/favicons/naver.png',
-        };
-        try {
-          const hostname = new URL(pageUrl).hostname.toLowerCase();
-          for (const [service, assetPath] of Object.entries(CUSTOM_FAVICON_MAP)) {
-            if (
-              hostname === service ||
-              hostname.startsWith(`${service}.`) ||
-              hostname.includes(`.${service}.`) ||
-              hostname.endsWith(`.${service}`)
-            ) {
-              const assetUrl = chrome.runtime?.getURL?.(assetPath);
-              if (assetUrl) return assetUrl;
-            }
-          }
-        } catch (e) { /* fall through to DOM-based extraction */ }
-
-        if (!isInIframe) {
-          // Top-frame: read <link> tags from the live page DOM.
-
-          // 1. apple-touch-icon link tag
-          const appleTouchIcon = document.querySelector(
-            'link[rel="apple-touch-icon"]'
-          );
-          if (appleTouchIcon?.href) return String(appleTouchIcon.href).trim();
-
-          // 2. link[rel="icon"] with explicit sizes — pick largest
-          const iconLinks = Array.from(
-            document.querySelectorAll('link[rel="icon"][sizes]')
-          );
-          if (iconLinks.length > 0) {
-            const sorted = iconLinks.slice().sort((a, b) => {
-              const sizeOf = (el) => {
-                const s = String(el.getAttribute('sizes') || '').toLowerCase();
-                if (s === 'any') return 9999;
-                const m = s.match(/(\d+)/);
-                return m ? parseInt(m[1], 10) : 0;
-              };
-              return sizeOf(b) - sizeOf(a);
-            });
-            const best = sorted[0];
-            if (best?.href) return String(best.href).trim();
-          }
-
-          // 3. generic icon or shortcut icon
-          const genericIcon = document.querySelector(
-            'link[rel="icon"], link[rel="shortcut icon"]'
-          );
-          if (genericIcon?.href) return String(genericIcon.href).trim();
-        }
-
-        // 4. same-origin apple-touch-icon.png (works for both top and iframe,
-        //    using the correct parent page origin).
-        if (origin) return `${origin}/apple-touch-icon.png`;
-
-        // 5. same-origin favicon.ico
-        if (origin) return `${origin}/favicon.ico`;
-
-        return '';
-      } catch (e) {
-        return '';
-      }
-    })();
 
     // Clipboard copy: start async copy without blocking. Badge IIFE below
     // reports clipboard success/failure via markCoreHighlightClipped + text.
@@ -1797,8 +1684,7 @@ async function saveActiveCoreItem(request = {}) {
             url,
             activeItem instanceof Element ? activeItem : document.body,
             {
-              confirmedType: String(meta?.confirmedType || '').trim(),
-              imageUrl: String(faviconImgUrl || meta?.image?.url || imgUrl || '').trim(),
+              imageUrl: String(imgUrl || meta?.image?.url || '').trim(),
             }
           )
         : Promise.resolve({ success: false });
@@ -1840,9 +1726,7 @@ async function saveActiveCoreItem(request = {}) {
             const clipboardResult = await coreClipboardPromise;
             if (clipboardResult?.success) {
               markCoreHighlightClipped();
-              const successText = coreClipboardCategory === 'Image'
-                ? 'Image clipped'
-                : 'URL clipped';
+              const successText = 'Image clipped';
               setCoreStatusBadgeText(successText);
             } else {
               setCoreStatusBadgeText('Clip failed');
@@ -1960,27 +1844,22 @@ async function saveActiveCoreItem(request = {}) {
       url,
       title: title || url,
       timestamp: Date.now(),
-      saved_by: 'browser-extension',
       userLanguage: navigator.language || 'en',
       pageUrl: meta?._pageUrl || window.location.href,
       ...(tempId ? { temp_id: tempId } : {}),
       ...(htmlContext ? { htmlContext } : {}),
-      ...(faviconImgUrl ? { img_url: faviconImgUrl } : {}),
+      ...(imgUrl ? { img_url: imgUrl } : {}),
       // === PHASE_IMAGE_URL_PIPELINE ===
       ...(imgThumbnailB64 ? { img_thumbnail_b64: imgThumbnailB64 } : {}),
       // === END PHASE_IMAGE_URL_PIPELINE ===
       // === PHASE27G_PAYLOAD_DOM ===
-      ...(domImgSrc && domImgSrc !== faviconImgUrl
+      ...(domImgSrc && domImgSrc !== imgUrl
         ? { img_url_dom: domImgSrc }
         : {}),
       // === END PHASE27G_PAYLOAD_DOM ===
       ...(userId ? { userId } : {}),
       ...(meta?.category      ? { category:       meta.category }      : {}),
       ...(meta?.platform      ? { platform:        meta.platform }      : {}),
-      ...(meta?.confirmedType ? { confirmed_type:  meta.confirmedType } : {}),
-      img_url_method: isYouTubeSave
-        ? 'youtube-thumbnail'
-        : (isExtractedImg ? 'extracted' : 'favicon'),
     };
 
     // Optimistic UI: notify Side Panel to show a temporary card immediately
@@ -1992,21 +1871,17 @@ async function saveActiveCoreItem(request = {}) {
           tempId,
           url,
           title:              title || url,
-          imgUrl:             faviconImgUrl || '',
+          imgUrl:             imgUrl || '',
           // === PHASE_IMAGE_URL_PIPELINE ===
           ...(imgThumbnailB64 ? { imgThumbnailB64 } : {}),
           // === END PHASE_IMAGE_URL_PIPELINE ===
           // === PHASE27G_OPTIMISTIC_DOM ===
-          ...(domImgSrc && domImgSrc !== faviconImgUrl
+          ...(domImgSrc && domImgSrc !== imgUrl
             ? { imgUrlDom: domImgSrc }
             : {}),
           // === END PHASE27G_OPTIMISTIC_DOM ===
           category:           String(meta?.category      || '').trim(),
           platform:           String(meta?.platform      || '').trim(),
-          confirmedType:      String(meta?.confirmedType || '').trim(),
-          img_url_method: isYouTubeSave
-            ? 'youtube-thumbnail'
-            : (isExtractedImg ? 'extracted' : 'favicon'),
           createdAt:          Date.now(),
         });
       } catch { /* Side Panel may not be open — silently ignore */ }
@@ -2436,7 +2311,6 @@ function buildSyntheticStateFromIframeHover(info) {
     lastExtractedMetadata: {
       activeHoverUrl: info.url,
       category: info.category,
-      confirmedType: info.confirmedType,
       image: info.imageUrl ? { url: info.imageUrl } : null,
       title: info.title,
       platform: info.platform,
@@ -2452,10 +2326,7 @@ function notifyIframeClipboardResult(info, clipboardPromise) {
   if (!info || !clipboardPromise) return;
   Promise.resolve(clipboardPromise).then((result) => {
     const success = result?.success === true;
-    const category = String(info.category || '').trim();
-    const successText = success
-      ? (category === 'Image' ? 'Image clipped' : 'URL clipped')
-      : null;
+    const successText = success ? 'Image clipped' : null;
     try {
       info.sourceWindow?.postMessage({
         [KC_MSG_PREFIX]: true,
@@ -2507,131 +2378,68 @@ function performSyncClipboardWrite(state) {
   // === END PHASE_IFRAME_CLIPBOARD ===
 
   const meta = state.lastExtractedMetadata || {};
-  const category = String(meta.category || '').trim();
-  const confirmedType = String(meta.confirmedType || '').trim();
   const imageUrl = String(meta.image?.url || '').trim();
-  const url = String(state.activeHoverUrl || meta.activeHoverUrl || '').trim();
   const activeItem = state.activeCoreItem;
 
-  const buildImageBlobPromise = () => (async () => {
-    if (imageUrl) {
-      try {
-        // === PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
-        const b = await raceImageUrlToPngBlob(imageUrl);
-        // === END PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
-        if (b) return b;
-      } catch (_) { /* fall through */ }
-    }
-    if (activeItem instanceof Element) {
-      const imgEl = getDominantImageElement(activeItem);
-      if (imgEl) {
-        try {
-          const b = await imgElementToBlob(imgEl);
-          if (b) return b;
-        } catch (_) { /* fall through */ }
-      }
-    }
-    throw new Error('Image blob unavailable');
-  })();
-
-  if (category === 'Image') {
-    if (!imageUrl && !(activeItem instanceof Element)) return null;
-    const blobPromise = buildImageBlobPromise();
-    // === PHASE_IMAGE_URL_PIPELINE ===
-    return attachThumbnailPromiseToClipboardWrite(blobPromise);
-    // === END PHASE_IMAGE_URL_PIPELINE ===
-  }
-
-  if (category === 'SNS' && confirmedType === 'contents' && imageUrl) {
+  if (imageUrl) {
     const blobPromise = (async () => {
       try {
         // === PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
-        const b = await raceImageUrlToPngBlob(imageUrl);
+        const raced = await raceImageUrlToPngBlob(imageUrl);
         // === END PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
-        if (b) return b;
+        if (raced) return raced;
       } catch (_) { /* fall through */ }
-      throw new Error('SNS blob unavailable');
+      if (activeItem instanceof Element) {
+        const imgEl = getDominantImageElement(activeItem);
+        if (imgEl) {
+          try {
+            const b = await imgElementToBlob(imgEl);
+            if (b) return b;
+          } catch (_) { /* fall through */ }
+        }
+      }
+      return null;
     })();
     // === PHASE_IMAGE_URL_PIPELINE ===
     return attachThumbnailPromiseToClipboardWrite(blobPromise);
     // === END PHASE_IMAGE_URL_PIPELINE ===
   }
 
-  if (!url) return null;
-  return navigator.clipboard
-    .writeText(url)
-    .then(() => ({ success: true }))
-    .catch(() => ({ success: false }));
+  return null;
 }
 // === END PHASE_CLIPBOARD_SYNC_WRITE ===
 
 /**
- * Perform clipboard copy based on category. Returns success/fail info without
- * showing any Toast. Toast display is handled separately by the caller after
- * combining with save result.
- *
- * For 'Image' category: prefers binary copy via imageUrlToPngBlob on the saved
- *   img_url (e.g. Google image search /imgres original URL), then falls back
- *   to imgElementToBlob. Does NOT fall back to URL copy — returns { success: false }
- *   if both fail so the caller can decide how to communicate the failure.
- * For 'SNS' with confirmedType 'contents': tries binary copy from options.imageUrl
- *   (same URL as saved img_url); on failure falls back to URL plain text.
- * For other categories: copies the URL as plain text.
+ * Perform clipboard copy. Returns success/fail info without showing any Toast.
+ * When imageUrl is set: URL race (KK prefetch cache) then DOM fallback.
+ * Otherwise leaves clipboard empty (no URL-text fallback).
  */
 async function performClipboardCopy(category, url, rootElementForDominant, options = {}) {
-  const { confirmedType, imageUrl } = options;
+  const { imageUrl } = options;
   try {
-    if (category === 'Image') {
-      // Phase 19e: prefer URL-based fetch first. For Google image
-      // search results, the saved img_url is the original-resolution
-      // URL extracted from the /imgres anchor — fetching it directly
-      // produces a much higher quality blob than the inline base64
-      // thumbnail in the DOM <img>. For other Image clips, URL-based
-      // fetch and DOM-based fetch produce the same result, so this
-      // is a no-op.
-      if (imageUrl) {
-        try {
-          const blob = await imageUrlToPngBlob(imageUrl);
-          if (blob) {
-            await navigator.clipboard.write([
-              new ClipboardItem({ [blob.type]: blob })
-            ]);
-            return { success: true };
-          }
-        } catch (_) { /* fall through to DOM-based copy */ }
-      }
-      // DOM-based copy (existing behavior; fallback if URL fetch fails)
-      const imgEl = getDominantImageElement(rootElementForDominant);
-      if (imgEl) {
-        const blob = await imgElementToBlob(imgEl);
-        if (blob) {
-          await navigator.clipboard.write([
-            new ClipboardItem({ [blob.type]: blob })
-          ]);
-          return { success: true };
-        }
-      }
-      // Image binary copy failed — do not fall back to URL; caller will handle.
-      return { success: false };
-    }
-
-    // SNS contents: try image binary copy via the saved img_url.
-    // On failure, fall back to URL text (the post URL is still useful).
-    if (category === 'SNS' && confirmedType === 'contents' && imageUrl) {
+    if (imageUrl) {
       try {
-        const blob = await imageUrlToPngBlob(imageUrl);
+        let blob = null;
+        try {
+          // === PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
+          blob = await raceImageUrlToPngBlob(imageUrl);
+          // === END PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
+        } catch (_) { /* fall through */ }
+        if (!blob && rootElementForDominant instanceof Element) {
+          const imgEl = getDominantImageElement(rootElementForDominant);
+          if (imgEl) {
+            blob = await imgElementToBlob(imgEl);
+          }
+        }
         if (blob) {
           await navigator.clipboard.write([
-            new ClipboardItem({ [blob.type]: blob })
+            new ClipboardItem({ [blob.type || 'image/png']: blob })
           ]);
           return { success: true };
         }
-      } catch (_) { /* fall through to URL text */ }
-      // Fall through: copy URL as text fallback
+      } catch (_) { /* fall through */ }
     }
-
-    await navigator.clipboard.writeText(url);
-    return { success: true };
+    return { success: false };
   } catch (err) {
     console.warn('[KickClip] Clipboard copy failed:', err);
     return { success: false };
@@ -2741,7 +2549,6 @@ function mountSaveMessageListener() {
                 title: iframeRelayData.title || '',
                 category: iframeRelayData.category || '',
                 platform: iframeRelayData.platform || '',
-                confirmedType: iframeRelayData.confirmedType || '',
                 image: iframeRelayData.imgUrl ? { url: iframeRelayData.imgUrl } : null,
                 _pageUrl: iframeRelayData.pageUrl || '',
                 _isIframeRelay: true,
@@ -2836,7 +2643,6 @@ function mountSaveMessageListener() {
                 imgUrl,
                 category: String(meta?.category || '').trim(),
                 platform: String(meta?.platform || '').trim(),
-                confirmedType: String(meta?.confirmedType || '').trim(),
                 pageUrl: String(window.location.href || '').trim(),
               },
               '*'
@@ -2949,7 +2755,6 @@ function mountWindowListeners() {
           url: String(state.activeHoverUrl || '').trim(),
           imageUrl: String(meta?.image?.url || '').trim(),
           category: String(meta?.category || '').trim(),
-          confirmedType: String(meta?.confirmedType || '').trim(),
           title: String(meta?.title || '').trim(),
           platform: String(meta?.platform || '').trim(),
           pageUrl: String(window.location.href || '').trim(),
@@ -3021,7 +2826,6 @@ function mountWindowListeners() {
         state.lastExtractedMetadata = {
           activeHoverUrl: iframeInfo.url,
           category: iframeInfo.category,
-          confirmedType: iframeInfo.confirmedType,
           image: iframeInfo.imageUrl ? { url: iframeInfo.imageUrl } : null,
           title: iframeInfo.title,
           platform: iframeInfo.platform,
@@ -3302,7 +3106,6 @@ function mountIframeHoverPropagationListener() {
             url: String(data.url || '').trim(),
             imageUrl: String(data.imageUrl || '').trim(),
             category: String(data.category || '').trim(),
-            confirmedType: String(data.confirmedType || '').trim(),
             title: String(data.title || '').trim(),
             platform: String(data.platform || '').trim(),
             pageUrl: String(data.pageUrl || '').trim(),
@@ -3323,7 +3126,6 @@ function mountIframeHoverPropagationListener() {
             url: String(data.url || '').trim(),
             imageUrl: String(data.imageUrl || '').trim(),
             category: String(data.category || '').trim(),
-            confirmedType: String(data.confirmedType || '').trim(),
             title: String(data.title || '').trim(),
             platform: String(data.platform || '').trim(),
             pageUrl: String(data.pageUrl || '').trim(),

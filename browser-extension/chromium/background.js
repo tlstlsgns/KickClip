@@ -250,7 +250,6 @@ function saveLinkFromContextMenu(tab, linkUrl, linkText) {
     url: linkUrl,
     title: linkText || linkUrl,
     timestamp: Date.now(),
-    saved_by: 'extension'
   };
   
   saveDirectly(tab, null, payload);
@@ -282,7 +281,6 @@ async function saveDirectly(tab, imageUrl, payload) {
     url: tab.url,
     title: tab.title,
     timestamp: Date.now(),
-    saved_by: 'extension',
     ...(imageUrl && { img_url: imageUrl }),
   };
 

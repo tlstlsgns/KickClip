@@ -614,7 +614,6 @@ function getUnifiedDockList() {
 // === PHASE_IMAGE_URL_PIPELINE ===
 function shouldUsePlaceholder(item) {
   if (item?.img_thumbnail_b64) return false;
-  if (item?.img_url_method === 'favicon') return true;
   const imgUrl = String(item?.img_url || '').trim();
   if (imgUrl) return false;
   const dom = String(item?.img_url_dom || '').trim();
@@ -631,28 +630,6 @@ function getCardThumbnailUrl(item) {
 }
 // === END PHASE_IMAGE_URL_PIPELINE ===
 // === END PHASE_SIDEPANEL_UNIFIED_LIST ===
-
-/**
- * Normalizes both legacy and new-schema item category/confirmedType.
- * Returns an object { category, confirmedType } in the new schema.
- */
-function normalizeItemCategoryAndType(item) {
-  const rawCategory = (item?.category || '').trim();
-  const rawType = (item?.confirmed_type || item?.confirmedType || '').trim();
-
-  // SNS: normalize confirmedType to 'contents' or 'post'
-  if (rawCategory === 'SNS') {
-    if (rawType === 'Image' || rawType === 'Video' || rawType === 'contents') {
-      return { category: 'SNS', confirmedType: 'contents' };
-    }
-    // 'Post', 'post', empty, or anything else → 'post'
-    return { category: 'SNS', confirmedType: 'post' };
-  }
-
-  // Image / anything else (legacy values) — return as-is; confirmedType should be empty for these
-  return { category: rawCategory, confirmedType: rawType };
-}
-
 
 /**
  * Normalize the client-internal category value for dedup comparison.
@@ -1109,8 +1086,6 @@ function createDataCard(item) {
     </div>`;
 
   const thumbUrl = getCardThumbnailUrl(item);
-  const imgUrlMethod = String(item.img_url_method || '');
-  const imgClassExtra = imgUrlMethod === 'screenshot' ? ' is-screenshot' : '';
   const escContext = (s) =>
     String(s || '')
       .replace(/&/g, '&amp;')
@@ -1138,7 +1113,7 @@ function createDataCard(item) {
   if (thumbUrl) {
     mainContentHtml = `
       <div class="data-card-imgcontainer">
-        <img src="${getProxiedImageUrl(thumbUrl)}" alt="${escapedTitle}" class="data-card-image${imgClassExtra}">
+        <img src="${getProxiedImageUrl(thumbUrl)}" alt="${escapedTitle}" class="data-card-image">
       </div>`;
   } else {
     mainContentHtml = `
@@ -1300,7 +1275,7 @@ function animateEntrance(container, wrapper) {
 }
 
 // ── Optimistic UI ─────────────────────────────────────────────────────────────
-function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThumbnailB64 = '', category, platform, confirmedType, imgUrlMethod, createdAt }) {
+function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThumbnailB64 = '', category, platform, createdAt }) {
   if (!currentUser) return;
 
   // Deduplication: ignore if a temp card with same tempId already exists
@@ -1322,12 +1297,9 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThum
   // categories, so a same-URL different-image clip wouldn't have
   // been caught — and we want consistency with the server here).
   const incomingCategory = normalizeCategoryForDedup(category);
-  const incomingConfirmedType = confirmedType || '';
   const incomingUrl = url || '';
   const incomingImgUrl = imgUrl || '';
-  const dedupRequiresImgUrl =
-    incomingCategory === 'Img' ||
-    (incomingCategory === 'SNS' && incomingConfirmedType === 'contents');
+  const dedupRequiresImgUrl = incomingCategory === 'Img';
 
   // Search optimisticCards map for a stricter match.
   // (Returns early without further work — duplicate optimistic
@@ -1345,11 +1317,7 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThum
     const itemUrl = typeof it.url === 'string' ? it.url : '';
     if (itemUrl !== incomingUrl) return false;
     const itemCat = normalizeCategoryForDedup(it.category);
-    const itemConfirmedType = typeof it.confirmed_type === 'string' ?
-      it.confirmed_type : '';
-    const itemRequiresImgUrl =
-      itemCat === 'Img' ||
-      (itemCat === 'SNS' && itemConfirmedType === 'contents');
+    const itemRequiresImgUrl = itemCat === 'Img';
     // Both sides must agree on the criteria. Mismatch (rare —
     // would mean the same URL was clipped under different
     // categories) means we don't dedup; let server decide.
@@ -1408,8 +1376,6 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThum
     _isOptimistic:   true,
     category:        category      || '',
     platform:        platform      || '',
-    confirmed_type:  confirmedType || '',
-    img_url_method:   imgUrlMethod || '',
     createdAt: typeof createdAt === 'number' ? createdAt : Date.now(),
   };
 
@@ -1446,11 +1412,9 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThum
     title,
     imgUrl,
     imgUrlDom: (imgUrlDom || '').trim(),
-    imgUrlMethod: imgUrlMethod || '',
     // Phase 18b: stored for client-side dedup pre-check.
     // Match against same fields on incoming addOptimisticCard calls.
     category: normalizeCategoryForDedup(category),
-    confirmedType: confirmedType || '',
     cardContainer: container,
   });
 
@@ -1527,17 +1491,10 @@ function applyOptimisticCardImage(tempId, imgUrl) {
   const main = card.querySelector('.data-card-main');
   if (!main) return;
 
-  if (entry.imgUrlMethod === 'favicon') {
-    card.dataset.imgUrl = imgUrl;
-    card.dataset.imgUrlDom = String(entry.imgUrlDom || '').trim();
-    return;
-  }
-
   const wrapper = document.createElement('div');
   wrapper.className = 'data-card-imgcontainer';
   const newImg = document.createElement('img');
   newImg.className = 'data-card-image';
-  if (entry.imgUrlMethod === 'screenshot') newImg.classList.add('is-screenshot');
   newImg.alt = String(entry.title || '');
   newImg.src = getProxiedImageUrl(imgUrl);
   wrapper.appendChild(newImg);
@@ -3136,12 +3093,10 @@ function loadData() {
             // server URL directly.
             const main = existingCard.querySelector('.data-card-main');
             if (main && !shouldUsePlaceholder(item)) {
-              const method = String(item.img_url_method || '');
               const wrapper = document.createElement('div');
               wrapper.className = 'data-card-imgcontainer';
               const newImg = document.createElement('img');
               newImg.className = 'data-card-image';
-              if (method === 'screenshot') newImg.classList.add('is-screenshot');
               newImg.alt = String(item.title || 'Untitled');
               newImg.src = getProxiedImageUrl(item.img_url);
               wrapper.appendChild(newImg);
@@ -3412,8 +3367,6 @@ if (chrome?.runtime?.onMessage) {
         imgThumbnailB64:   message.imgThumbnailB64 || '',
         category:          message.category      || '',
         platform:          message.platform      || '',
-        confirmedType:     message.confirmedType || '',
-        imgUrlMethod:      message.img_url_method   || '',
         createdAt:         typeof message.createdAt === 'number' ? message.createdAt : Date.now(),
       });
       return false;

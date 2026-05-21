@@ -222,8 +222,8 @@ async function fetchMetadata(url: string): Promise<{ title: string | null; descr
 // ── POST /api/v1/save-url ────────────────────────────────────────────────────
 app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> => {
   const {
-    url, title, timestamp, img_url, saved_by,
-    screenshot_base64, screenshot_bg_color, category, confirmed_type,
+    url, title, timestamp, img_url,
+    screenshot_base64, screenshot_bg_color, category,
     img_url_dom, // === PHASE27G_FIELD ===
     img_thumbnail_b64,
   } = req.body;
@@ -242,12 +242,7 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
   const resolvedImgUrl = img_url ? String(img_url).trim() : "";
   const clientCategoryRaw = typeof category === "string" ? category.trim() : "";
   const clientPlatformRaw = typeof req.body.platform === "string" ? req.body.platform.trim() : "";
-  const clientConfirmedTypeRaw = typeof confirmed_type === "string" ? confirmed_type.trim() : "";
   const clientSenderRaw = typeof req.body.sender === "string" ? req.body.sender.trim() : "";
-  const clientImgUrlMethodRaw =
-    typeof req.body.img_url_method === "string" &&
-    ["screenshot", "extracted", "favicon", "youtube-thumbnail"].includes(req.body.img_url_method) ?
-      (req.body.img_url_method as string) : "";
   const clientScreenshotPaddingRaw = typeof req.body.screenshot_padding === "number" ?
     req.body.screenshot_padding : 0;
   const clientTempIdRaw = typeof req.body.temp_id === "string" ?
@@ -262,9 +257,7 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
   // Dedup criteria: which categories match on url+img_url vs url-only.
   // Phase 18a: server is the authority for deduplication. Client-side
   // checks (Phase 18b) are a UX optimization layered on top.
-  const dedupRequiresImgUrl =
-    clientCategoryRaw === "Img" ||
-    (clientCategoryRaw === "SNS" && clientConfirmedTypeRaw === "contents");
+  const dedupRequiresImgUrl = clientCategoryRaw === "Img";
 
   try {
     const db = getFirestore();
@@ -318,7 +311,6 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
       timestamp,
       domain,
       order: newOrder,
-      saved_by: saved_by || "browser-extension",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     if (resolvedImgUrl) baseFields.img_url = resolvedImgUrl;
@@ -338,11 +330,9 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     // === END PHASE_IMAGE_URL_PIPELINE ===
     if (clientCategoryRaw) baseFields.category = clientCategoryRaw;
     if (clientPlatformRaw) baseFields.platform = clientPlatformRaw;
-    if (clientConfirmedTypeRaw) baseFields.confirmed_type = clientConfirmedTypeRaw;
     if (clientSenderRaw) baseFields.sender = clientSenderRaw;
     if (clientScreenshotPaddingRaw > 0) baseFields.screenshot_padding = clientScreenshotPaddingRaw;
     if (clientTempIdRaw) baseFields.temp_id = clientTempIdRaw;
-    if (clientImgUrlMethodRaw) baseFields.img_url_method = clientImgUrlMethodRaw;
 
     let docId: string;
     let isUpdate: boolean;

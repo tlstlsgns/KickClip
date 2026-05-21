@@ -3543,7 +3543,6 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
 
     // ── Step 1: SNS ───────────────────────────────────────────────────────────
     // Detect SNS platform first (before any media check).
-    // Then classify as `contents` (dominant media present) or `post` (no dominant media).
     let snsPlatform = '';
     if (host.includes('instagram.com')) {
       snsPlatform = 'Instagram';
@@ -3565,13 +3564,9 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
     }
 
     if (snsPlatform) {
-      // Dominant media check: 'Image' | 'Video' | '' — both Image and Video count as "contents".
-      const dominantType = getDominantMediaType();
-      const hasDominantMedia = dominantType === 'Image' || dominantType === 'Video';
       return {
         category: 'SNS',
         platform: snsPlatform,
-        confirmedType: hasDominantMedia ? 'contents' : 'post',
       };
     }
 
@@ -3580,7 +3575,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
     // Dominant Video falls through to the null-category default — Video is not a distinct category.
     const dominantType = getDominantMediaType();
     if (dominantType === 'Image') {
-      return { category: 'Image', platform: getPageDomain(), confirmedType: '' };
+      return { category: 'Image', platform: getPageDomain() };
     }
 
     // ── Step 3: Same-origin URL-based ─────────────────────────────────────────
@@ -3592,7 +3587,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
 
     if (sameOrigin) {
       if (/\.(jpg|jpeg|png|gif|webp|svg)$/i.test(path)) {
-        return { category: 'Image', platform: getPageDomain(), confirmedType: '' };
+        return { category: 'Image', platform: getPageDomain() };
       }
     }
 
@@ -3613,7 +3608,7 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
       // is biased toward still-image pages. Classification reaches Image only if
       // videoCount === 0 AND score >= 100.
       if (score >= 100 && videoCount === 0) {
-        return { category: 'Image', platform: getPageDomain(), confirmedType: '' };
+        return { category: 'Image', platform: getPageDomain() };
       }
     }
 
@@ -3621,8 +3616,8 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
     // KickClip now classifies only SNS and Image. Pages that match neither
     // return a null category, and downstream flows treat that as "no clip
     // target" (silent no-op gate is added in D3).
-    return { category: null, platform: getSavedDomain(), confirmedType: '' };
+    return { category: null, platform: getSavedDomain() };
   } catch (e) {
-    return { category: null, platform: '', confirmedType: '' };
+    return { category: null, platform: '' };
   }
 }
