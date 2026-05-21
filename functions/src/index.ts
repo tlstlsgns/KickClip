@@ -254,10 +254,17 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     return;
   }
 
-  // Dedup criteria: which categories match on url+img_url vs url-only.
-  // Phase 18a: server is the authority for deduplication. Client-side
-  // checks (Phase 18b) are a UX optimization layered on top.
-  const dedupRequiresImgUrl = clientCategoryRaw === "Img";
+  // Phase 18a: dedup by url + img_url. Server is the authority; client
+  // (Phase 18b in sidepanel.js) performs the same check optimistically.
+  //
+  // Rule (both sides):
+  //   existing.url === incoming.url
+  //   AND incoming.img_url and existing.img_url are non-empty trimmed strings
+  //   AND existing.img_url === incoming.img_url
+  //
+  // When incoming img_url is empty, dedup is skipped entirely — empty-image
+  // clips always create new documents (debugging visibility + consistency
+  // with the image-clip product semantics).
 
   try {
     const db = getFirestore();
@@ -266,25 +273,29 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     // Step 1: search for an existing doc matching the dedup criteria.
     // User max ~10 items; full collection fetch is cheap.
     let dedupHitDocId: string | null = null;
-    try {
-      const allSnap = await itemsRef.get();
-      for (const doc of allSnap.docs) {
-        const data = doc.data();
-        const existingUrl = typeof data.url === "string" ? data.url.trim() : "";
-        if (existingUrl !== resolvedUrl) continue;
-        if (dedupRequiresImgUrl) {
+
+    if (resolvedImgUrl) {
+      try {
+        const allSnap = await itemsRef.get();
+        for (const doc of allSnap.docs) {
+          const data = doc.data();
+          const existingUrl = typeof data.url === "string" ? data.url.trim() : "";
+          if (existingUrl !== resolvedUrl) continue;
           const existingImgUrl = typeof data.img_url === "string" ? data.img_url.trim() : "";
+          if (!existingImgUrl) continue;
           if (existingImgUrl !== resolvedImgUrl) continue;
+          dedupHitDocId = doc.id;
+          break;
         }
-        dedupHitDocId = doc.id;
-        break;
+      } catch (searchErr) {
+        // Search failure should not block the save. Fall through to
+        // new-doc path (degrades gracefully — worst case is a duplicate).
+        console.error("[save-url] dedup search failed:", searchErr);
+        dedupHitDocId = null;
       }
-    } catch (searchErr) {
-      // Search failure should not block the save. Fall through to
-      // new-doc path (degrades gracefully — worst case is a duplicate).
-      console.error("[save-url] dedup search failed:", searchErr);
-      dedupHitDocId = null;
     }
+    // When resolvedImgUrl is empty, dedupHitDocId stays null and the
+    // create-new branch below runs.
 
     const domain = resolvedUrl.length > 0 ?
       extractSource(resolvedUrl) : (resolvedImgUrl ? "local" : "unknown");
