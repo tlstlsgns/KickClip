@@ -742,6 +742,20 @@ function refreshCoreItemMetadata(coreItem) {
   } catch (_) { /* defensive — refresh failures are non-fatal */ }
 }
 
+// Extracts the value of the `transform` property from a style attribute string,
+// or '' if absent. Used by mountActiveCoreItemMutationObserver to compare
+// transform-only changes (e.g. carousel slide via translateX/translate3d) while
+// ignoring unrelated style mutations (opacity, color, layout).
+//
+// Implementation: minimal regex match on the inline `transform:` declaration.
+// Inline `style` attribute values are semicolon-separated declarations; this
+// captures everything between `transform:` and the next `;` or end of string.
+function extractTransformFromStyle(styleString) {
+  if (!styleString || typeof styleString !== 'string') return '';
+  const match = styleString.match(/(?:^|;)\s*transform\s*:\s*([^;]*)/i);
+  return match ? match[1].trim() : '';
+}
+
 function mountActiveCoreItemMutationObserver(coreItem) {
   unmountActiveCoreItemMutationObserver();
 
@@ -751,9 +765,32 @@ function mountActiveCoreItemMutationObserver(coreItem) {
     let relevant = false;
     for (const m of mutations) {
       if (m.type === 'attributes') {
-        if (String(m.target?.tagName || '').toUpperCase() === 'A') {
+        const tagName = String(m.target?.tagName || '').toUpperCase();
+        const attrName = m.attributeName;
+
+        // href on anchor: original behavior.
+        if (attrName === 'href' && tagName === 'A') {
           relevant = true;
           break;
+        }
+
+        // src on img: lazy-load swap or carousel image change.
+        if (attrName === 'src' && tagName === 'IMG') {
+          relevant = true;
+          break;
+        }
+
+        // style: only the transform portion. Carousel slide via
+        // translateX/translate3d/matrix; ignore opacity/color/layout.
+        if (attrName === 'style') {
+          const oldTransform = extractTransformFromStyle(m.oldValue || '');
+          const newTransform = extractTransformFromStyle(
+            m.target?.getAttribute?.('style') || ''
+          );
+          if (oldTransform !== newTransform) {
+            relevant = true;
+            break;
+          }
         }
       } else if (m.type === 'childList') {
         const isAnchorOrContainsAnchor = (node) =>
@@ -791,7 +828,8 @@ function mountActiveCoreItemMutationObserver(coreItem) {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['href'],
+    attributeFilter: ['href', 'src', 'style'],
+    attributeOldValue: true,
   });
 
   _coreItemMutationObserver = observer;
