@@ -1010,6 +1010,82 @@ function isVisuallyHidden(el) {
   return false;
 }
 
+// === PHASE_ARIA_HIDDEN_ONLY_RELAX ===
+// Returns true when an image's only "hidden" signal in its visibility
+// chain (self + ancestors up to body, depth-capped) is aria-hidden.
+// Returns false when any genuine hide indicator (display:none,
+// visibility:hidden, opacity<0.01, zero rect without lazy-load excuse)
+// is present anywhere on the chain.
+//
+// Purpose: relax filterSignificantImages's visibility gate for carousel
+// slides where the wrapper carries aria-hidden="true" but the slide is
+// still positioned and layout-present. Other isVisuallyHidden call
+// sites (sibling matching, per-card validation, rescue) remain strict.
+//
+// Genuine-hide indicators take precedence; the function does NOT relax
+// any of them. The function only checks whether aria-hidden was the
+// SOLE reason isVisuallyHidden returned true.
+function isOnlyAriaHiddenInVisibilityChain(el) {
+  if (!el || el.nodeType !== 1) return false;
+
+  // Self check: any genuine hide indicator on the image itself disqualifies.
+  try {
+    const cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (cs) {
+      if (cs.display === 'none') return false;
+      if (cs.visibility === 'hidden') return false;
+      const opacity = parseFloat(cs.opacity);
+      if (isFinite(opacity) && opacity < 0.01) return false;
+    }
+    const r = el.getBoundingClientRect?.();
+    if (r && (r.width <= 0 || r.height <= 0)) {
+      // Lazy-load mirror of PHASE_LAZY_LOAD_ZERO_RECT_FALLBACK:
+      // <img> with zero self-rect but a parent that has layout space
+      // is structurally present.
+      const tag = String(el.tagName || '').toUpperCase();
+      if (tag !== 'IMG' || !el.parentElement) return false;
+      const pr = el.parentElement.getBoundingClientRect?.();
+      if (!pr || pr.width <= 0 || pr.height <= 0) return false;
+    }
+  } catch (e) {
+    // Defensive: if self check throws, fall through to ancestor scan.
+  }
+
+  // Track whether aria-hidden appeared anywhere. If only false, this
+  // function returns false (the relaxation isn't relevant to the image).
+  let foundAriaHidden = false;
+
+  // Self aria-hidden counts too.
+  try {
+    if (el.getAttribute?.('aria-hidden') === 'true') foundAriaHidden = true;
+  } catch (e) {}
+
+  // Ancestor walk: any genuine hide on an ancestor disqualifies.
+  try {
+    let cur = el.parentElement;
+    let depth = 0;
+    while (cur && cur !== document.body && depth < 10) {
+      try {
+        const cs = window.getComputedStyle ? window.getComputedStyle(cur) : null;
+        if (cs) {
+          if (cs.display === 'none') return false;
+          if (cs.visibility === 'hidden') return false;
+        }
+        if (cur.getAttribute?.('aria-hidden') === 'true') {
+          foundAriaHidden = true;
+        }
+      } catch (e) {}
+      cur = cur.parentElement;
+      depth += 1;
+    }
+  } catch (e) {
+    return false;
+  }
+
+  return foundAriaHidden;
+}
+// === END PHASE_ARIA_HIDDEN_ONLY_RELAX ===
+
 /**
  * Phase 26: Detect whether an element is part of a map widget.
  *
@@ -1177,7 +1253,16 @@ function filterSignificantImages(root = document) {
     // aria-hidden self) reach this check; isVisuallyHidden will still
     // catch them via ANCESTOR aria-hidden, which is the intended
     // ItemMap behavior.
-    if (isVisuallyHidden(img)) continue;
+    if (isVisuallyHidden(img)) {
+      // === PHASE_ARIA_HIDDEN_ONLY_RELAX_INTEGRATION ===
+      // Carousel slides (Flickity etc.) carry aria-hidden="true" on
+      // non-active wrappers but remain layout-positioned. Allow them
+      // into the pool so Type D/E detection can register them ahead
+      // of slide transitions, eliminating the "next slide not detected
+      // until resize" gap.
+      if (!isOnlyAriaHiddenInVisibilityChain(img)) continue;
+      // === END PHASE_ARIA_HIDDEN_ONLY_RELAX_INTEGRATION ===
+    }
     // === END PHASE23_VISIBILITY_FILTER ===
 
     // === PHASE26_MAP_FILTER ===
@@ -1721,7 +1806,7 @@ function detectFacebookFallback(root, existingElements = new Set()) {
 const TYPED_PATH_MAX_DEPTH = 25;
 const TYPED_MIN_GROUP_SIZE = 2;
 const TYPED_NAV_TAGS = new Set(['HEADER', 'FOOTER', 'NAV']);
-const TYPED_NAV_ROLES = new Set(['banner', 'contentinfo', 'navigation']);
+const TYPED_NAV_ROLES = new Set(['banner', 'navigation']);
 
 /**
  * Build a path-node signature: tag + a small set of stable structural attributes.
