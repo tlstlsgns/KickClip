@@ -2037,13 +2037,61 @@ async function detectTypeDItemMaps(root = document) {
     if (!validateVisualLayout(filteredCards.map((x) => x.card))) continue;
     // === END PHASE20_HOTFIX_LAYOUT_CONSISTENCY ===
 
+// === PHASE_TYPE_D_INCLUSIVE_SIBLING_RESCUE ===
+// After strict detection + outlier removal, examine cardWrapper's direct
+// siblings (same grandparent) and rescue any sibling that visually fits
+// the grid but failed path matching (or was an outlier on its own but
+// not relative to the now-established group median). A sibling qualifies
+// if it (a) has a dominant <img>, (b) has at least one navigable anchor,
+// (c) passes the same median ± 1.5x outlier band (width OR height in
+// range), (d) is not visually hidden, and (e) is not already in
+// filteredCards. Rescued siblings are appended to inclusiveCards and
+// treated identically downstream (image marking, candidate building,
+// hover companion construction). The original group's signature is
+// reused; rescued cards inherit the same itemMapSignature.
+    const inclusiveCards = filteredCards.slice();
+    try {
+      const rescueGrandparent = cardWrapper?.parentElement;
+      if (rescueGrandparent) {
+        const existingCardSet = new Set(filteredCards.map((x) => x.card));
+        // Reuse median bands computed earlier (PHASE20_HOTFIX_OUTLIER).
+        // widthLow/widthHigh/heightLow/heightHigh are already in scope.
+        const sibCandidates = Array.from(rescueGrandparent.children)
+          .filter((s) => s.nodeType === 1 && !existingCardSet.has(s) && !isVisuallyHidden(s));
+        for (const sib of sibCandidates) {
+          const sibRect = sib.getBoundingClientRect?.();
+          if (!sibRect || sibRect.width <= 0 || sibRect.height <= 0) continue;
+          // Outlier band (same OR-relax semantics as PHASE20_HOTFIX_OUTLIER_RELAX).
+          const sibWidthInRange = sibRect.width >= widthLow && sibRect.width <= widthHigh;
+          const sibHeightInRange = sibRect.height >= heightLow && sibRect.height <= heightHigh;
+          if (!sibWidthInRange && !sibHeightInRange) continue;
+          // Dominant image presence.
+          let sibDominantImgs;
+          try {
+            sibDominantImgs = findDominantImagesInElement(sib);
+          } catch (e) {
+            sibDominantImgs = new Set();
+          }
+          if (!sibDominantImgs.size) continue;
+          // Anchor presence (self or descendant).
+          const sibIsAnchor = sib.tagName === 'A' && sib.hasAttribute?.('href');
+          const sibHasDescendantAnchor = !!sib.querySelector?.('a[href]');
+          if (!sibIsAnchor && !sibHasDescendantAnchor) continue;
+          inclusiveCards.push({ card: sib, dominantImgs: sibDominantImgs });
+        }
+      }
+    } catch (e) {
+      // defensive: rescue is additive, do not crash the detection on failure
+    }
+// === END PHASE_TYPE_D_INCLUSIVE_SIBLING_RESCUE ===
+
     // ─── Build candidate entries (compatible with detectItemMaps schema) ───
     const grandparent = cardWrapper.parentElement;
     const identitySignature = grandparent ? signatureOfNode(grandparent) : '';
     const structureSignature = pathSig.join('::');
     const itemMapSignature = `${identitySignature}::F:${structureSignature}::E:D`;
 
-    for (const { card } of filteredCards) {
+    for (const { card } of inclusiveCards) {
       try {
         if (significantImageSet.has(card)) acceptedImageRefs.add(card);
         const innerImgs = card.querySelectorAll?.('img[src]') || [];
@@ -2058,7 +2106,7 @@ async function detectTypeDItemMaps(root = document) {
       }
     }
 
-    for (const { card, dominantImgs } of filteredCards) {
+    for (const { card, dominantImgs } of inclusiveCards) {
       // === PHASE27E_HOVER_COMPANIONS (Type D) ===
       const hoverCompanions = new Set();
       try {
