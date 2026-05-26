@@ -2550,7 +2550,58 @@ export async function detectItemMaps(root = document) {
     // Run new image-first Type D detection before the existing loop.
     // Existing main loop will skip elements already classified by the new system,
     // so old D path doesn't compete or duplicate.
-    const { candidates: typeDCandidates, rejectedImages } = await detectTypeDItemMaps(root);
+const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItemMaps(root);
+
+    // === PHASE_TYPE_B_PRIORITY_OVER_TYPE_D ===
+    // Filter Type D candidates whose ancestor chain contains a
+    // share-button-evidence element. Those belong to Type B (the main loop
+    // below will pick them up via getEvidenceType → hasShareButtonEvidence).
+    // Rationale: Type D's significant-image pool now includes <video>
+    // (PHASE_VIDEO_MEDIA_PARITY), and video readyState/visibility varies
+    // between detection cycles. Without this filter, the same Instagram
+    // post element flips between Type D and Type B depending on whether
+    // its <video> qualified for the pool that cycle. Type B's gates are
+    // image-state-independent, so giving it priority restores stable
+    // classification.
+    //
+    // Per-invocation WeakMap cache: many Type D candidates often share the
+    // same ancestor (e.g., multiple <img>/<video> inside one Instagram
+    // <article>); without memoization the cost would be quadratic.
+    //
+    // Only active on TYPE_B_PLATFORMS — other platforms have no Type B
+    // detection to compete with, so Type D should not be filtered there.
+    let typeDCandidates = typeDCandidatesRaw;
+    try {
+      if (TYPE_B_PLATFORMS.has(getCurrentPlatform())) {
+        const shareEvidenceCache = new WeakMap();
+        const hasShareEvidenceCached = (el) => {
+          if (!el || el.nodeType !== 1) return false;
+          if (shareEvidenceCache.has(el)) return shareEvidenceCache.get(el);
+          let result = false;
+          try { result = hasShareButtonEvidence(el); } catch (_) { result = false; }
+          shareEvidenceCache.set(el, result);
+          return result;
+        };
+        const ANCESTOR_DEPTH_LIMIT = 15;
+        typeDCandidates = typeDCandidatesRaw.filter((cand) => {
+          const el = cand?.element;
+          if (!el || el.nodeType !== 1) return true; // defensive — keep
+          let cur = el.parentElement;
+          let depth = 0;
+          while (cur && depth < ANCESTOR_DEPTH_LIMIT) {
+            if (hasShareEvidenceCached(cur)) return false; // drop — Type B owns this
+            cur = cur.parentElement;
+            depth++;
+          }
+          return true;
+        });
+      }
+    } catch (_) {
+      // Defensive — on any failure, keep original Type D candidates.
+      typeDCandidates = typeDCandidatesRaw;
+    }
+    // === END PHASE_TYPE_B_PRIORITY_OVER_TYPE_D ===
+
     candidates.push(...typeDCandidates);
     const typeDElementSet = new Set();
     for (const c of typeDCandidates) {
