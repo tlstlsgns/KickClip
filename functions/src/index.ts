@@ -226,6 +226,7 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     screenshot_base64, screenshot_bg_color, category,
     img_url_dom, // === PHASE27G_FIELD ===
     img_thumbnail_b64,
+    origin_source,
   } = req.body;
 
   const isValidString = (v: unknown) => typeof v === "string" && (v as string).trim().length > 0;
@@ -240,6 +241,14 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
 
   const resolvedUrl = url ? String(url).trim() : "";
   const resolvedImgUrl = img_url ? String(img_url).trim() : "";
+  // === PHASE_ORIGIN_SOURCE_DEDUP ===
+  // origin_source replaces img_url as the dedup key. Distinct because
+  // video clips put base64 data URLs in img_url (changes between captures
+  // of the same video) — origin_source uses video.src (stable URL).
+  // For image clips, origin_source equals img_url (already a stable URL).
+  const resolvedOriginSource = typeof origin_source === "string"
+    ? origin_source.trim() : "";
+  // === END PHASE_ORIGIN_SOURCE_DEDUP ===
   const clientCategoryRaw = typeof category === "string" ? category.trim() : "";
   const clientPlatformRaw = typeof req.body.platform === "string" ? req.body.platform.trim() : "";
   const clientSenderRaw = typeof req.body.sender === "string" ? req.body.sender.trim() : "";
@@ -254,48 +263,50 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
     return;
   }
 
-  // Phase 18a: dedup by url + img_url. Server is the authority; client
-  // (Phase 18b in sidepanel.js) performs the same check optimistically.
+  // === PHASE_ORIGIN_SOURCE_DEDUP ===
+  // Dedup by url + origin_source. Replaces the former img_url-based rule
+  // (Phase 18a). Required because video clips use base64 data URLs as
+  // img_url which change between captures — origin_source provides a
+  // stable identifier (<video>.src for video, image URL for image).
+  // Client mirrors this in sidepanel.js PHASE_ORIGIN_SOURCE_DEDUP.
   //
-  // Rule (both sides):
+  // Rule:
   //   existing.url === incoming.url
-  //   AND incoming.img_url and existing.img_url are non-empty trimmed strings
-  //   AND existing.img_url === incoming.img_url
+  //   AND incoming.origin_source and existing.origin_source are non-empty
+  //   AND existing.origin_source === incoming.origin_source
   //
-  // When incoming img_url is empty, dedup is skipped entirely — empty-image
-  // clips always create new documents (debugging visibility + consistency
-  // with the image-clip product semantics).
+  // When incoming origin_source is empty → dedup skipped, new doc created.
+  // Legacy docs without origin_source field cannot match → also create
+  // new docs (acceptable trade-off, no migration).
 
   try {
     const db = getFirestore();
     const itemsRef = db.collection(`users/${userId}/items`);
 
-    // Step 1: search for an existing doc matching the dedup criteria.
-    // User max ~10 items; full collection fetch is cheap.
     let dedupHitDocId: string | null = null;
 
-    if (resolvedImgUrl) {
+    if (resolvedOriginSource) {
       try {
         const allSnap = await itemsRef.get();
         for (const doc of allSnap.docs) {
           const data = doc.data();
           const existingUrl = typeof data.url === "string" ? data.url.trim() : "";
           if (existingUrl !== resolvedUrl) continue;
-          const existingImgUrl = typeof data.img_url === "string" ? data.img_url.trim() : "";
-          if (!existingImgUrl) continue;
-          if (existingImgUrl !== resolvedImgUrl) continue;
+          const existingOriginSource = typeof data.origin_source === "string"
+            ? data.origin_source.trim() : "";
+          if (!existingOriginSource) continue;
+          if (existingOriginSource !== resolvedOriginSource) continue;
           dedupHitDocId = doc.id;
           break;
         }
       } catch (searchErr) {
-        // Search failure should not block the save. Fall through to
-        // new-doc path (degrades gracefully — worst case is a duplicate).
         console.error("[save-url] dedup search failed:", searchErr);
         dedupHitDocId = null;
       }
     }
-    // When resolvedImgUrl is empty, dedupHitDocId stays null and the
+    // When resolvedOriginSource is empty, dedupHitDocId stays null and the
     // create-new branch below runs.
+  // === END PHASE_ORIGIN_SOURCE_DEDUP ===
 
     const domain = resolvedUrl.length > 0 ?
       extractSource(resolvedUrl) : (resolvedImgUrl ? "local" : "unknown");
@@ -325,6 +336,7 @@ app.post("/api/v1/save-url", async (req: Request, res: Response): Promise<void> 
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     if (resolvedImgUrl) baseFields.img_url = resolvedImgUrl;
+    if (resolvedOriginSource) baseFields.origin_source = resolvedOriginSource;
     // === PHASE27G_FIELD ===
     const resolvedImgUrlDom = typeof img_url_dom === "string" ?
       img_url_dom.trim() :

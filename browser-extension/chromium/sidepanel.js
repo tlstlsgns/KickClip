@@ -1267,63 +1267,81 @@ function animateEntrance(container, wrapper) {
 }
 
 // ── Optimistic UI ─────────────────────────────────────────────────────────────
-function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThumbnailB64 = '', category, platform, createdAt }) {
+function addOptimisticCard({ tempId, url, title, imgUrl, originSource = '', imgThumbnailB64 = '', category, platform, createdAt }) {
   if (!currentUser) return;
 
   // Deduplication: ignore if a temp card with same tempId already exists
   if (optimisticCards.has(tempId)) return;
 
-  // Phase 18b: dedup by url + img_url (mirrors server Phase 18a).
+  // === PHASE_ORIGIN_SOURCE_DEDUP ===
+  // Dedup by url + origin_source (replaces Phase 18b's url + img_url).
+  // Video clips put base64 data URLs in img_url which change between
+  // captures of the same video — origin_source provides a stable identifier
+  // (video.src for video, img URL for image). Server enforces the same
+  // rule (see functions/src/index.ts PHASE_ORIGIN_SOURCE_DEDUP).
   //
-  // Rule:
-  //   existing.url === incoming.url
-  //   AND incoming.img_url is a non-empty trimmed string
-  //   AND existing.img_url is a non-empty trimmed string
-  //   AND existing.img_url === incoming.img_url
+  // When incoming origin_source is empty, dedup is skipped — every clip
+  // creates a new card. Same pattern as the old img_url empty handling.
   //
-  // When incoming img_url is empty, dedup is skipped entirely — every
-  // empty-image clip yields a new optimistic card and a new Firestore doc.
-  // No category gating: any clip can match any other by url+img_url alone.
-
+  // Legacy items (no origin_source field) are excluded from dedup
+  // (existing.origin_source is empty → skip). Re-clipping legacy items
+  // creates a new card. Acceptable trade-off (no migration).
   const incomingUrl = url || '';
-  const incomingImgUrl = String(imgUrl || '').trim();
+  const incomingOriginSource = String(originSource || '').trim();
 
-  // Race guard + Phase 18b pending check: skip when an in-flight optimistic
-  // card already matches the new rule.
-  if (incomingImgUrl) {
+  // Race guard: skip when an in-flight optimistic card already matches.
+  // On match, update the optimistic card's displayed image to the new clip's
+  // thumbnail/img_url (B1+C from origin_source dedup decisions). Server-side
+  // persistence is left to the in-flight first save; the second clip skips
+  // its own server call (current pattern, no extra cost).
+  if (incomingOriginSource) {
     for (const [, entry] of optimisticCards.entries()) {
       if ((entry.url || '') !== incomingUrl) continue;
-      const entryImgUrl = String(entry.imgUrl || '').trim();
-      if (!entryImgUrl) continue;
-      if (entryImgUrl !== incomingImgUrl) continue;
+      const entryOriginSource = String(entry.originSource || '').trim();
+      if (!entryOriginSource) continue;
+      if (entryOriginSource !== incomingOriginSource) continue;
+      // === PHASE_DEDUP_IMAGE_UPDATE ===
+      try {
+        const newDisplayImg = String(imgThumbnailB64 || imgUrl || '').trim();
+        if (newDisplayImg && entry.cardContainer?.isConnected) {
+          const card = entry.cardContainer.querySelector('.data-card');
+          if (card) updateCardImage(card, newDisplayImg);
+          // Keep entry.imgUrl in sync for future dedup pre-checks reading it.
+          entry.imgUrl = String(imgUrl || '').trim();
+        }
+      } catch (_) { /* defensive — match still suppresses duplicate card */ }
+      // === END PHASE_DEDUP_IMAGE_UPDATE ===
       return;
     }
   }
 
-  // Phase 18b match against current persisted items.
-  const matchingItem = incomingImgUrl
+  // Match against current persisted items.
+  const matchingItem = incomingOriginSource
     ? currentItems.find((it) => {
         const itemUrl = typeof it.url === 'string' ? it.url : '';
         if (itemUrl !== incomingUrl) return false;
-        const itemImgUrl = typeof it.img_url === 'string' ? it.img_url.trim() : '';
-        if (!itemImgUrl) return false;
-        return itemImgUrl === incomingImgUrl;
+        const itemOriginSource = typeof it.origin_source === 'string'
+          ? it.origin_source.trim() : '';
+        if (!itemOriginSource) return false;
+        return itemOriginSource === incomingOriginSource;
       })
     : null;
+  // === END PHASE_ORIGIN_SOURCE_DEDUP ===
 
   // === PHASE_SIDEPANEL_UNIFIED_LIST ===
   if (matchingItem) {
     // Found an existing DataCard. Reorder to top of unified dock list.
     const targetList = getUnifiedDockList();
+    let matchedDataCard = null;
     if (targetList) {
-      const dataCard = targetList.querySelector(
+      matchedDataCard = targetList.querySelector(
         `[data-doc-id="${matchingItem.id}"]`
       );
       // Phase 18b.1: data-doc-id lives on the inner data-card element,
       // but the actual list child is the wrapping .card-container
       // (which carries layout, animation, and image-container CSS).
       // Reorder the wrapper, not the inner card.
-      const cardContainer = dataCard?.closest('.card-container');
+      const cardContainer = matchedDataCard?.closest('.card-container');
       if (cardContainer && cardContainer.parentElement === targetList) {
         const todayDivider = targetList.querySelector(
           '.sp-timeline-divider[data-timeline-label="Today"]'
@@ -1338,9 +1356,22 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThum
         syncTimelineDividers(targetList);
       }
     }
+    // === PHASE_DEDUP_IMAGE_UPDATE ===
+    // Server's update(baseFields) will persist new img_url/img_thumbnail_b64
+    // to Firestore. The snapshot listener uses reconcileSnapshotSilently
+    // and does NOT update DOM (to avoid base64 reload flash). Explicit DOM
+    // update here ensures the displayed image reflects the latest clip
+    // immediately after the visual reorder.
+    try {
+      const newDisplayImg = String(imgThumbnailB64 || imgUrl || '').trim();
+      if (newDisplayImg && matchedDataCard) {
+        updateCardImage(matchedDataCard, newDisplayImg);
+      }
+    } catch (_) { /* defensive — reorder still happened */ }
+    // === END PHASE_DEDUP_IMAGE_UPDATE ===
     // Server save-url is still called by coreEntry.js. Server
     // dedup handles the data side; this client path handles only
-    // the visual reorder.
+    // the visual reorder + image update.
     return;
   }
 
@@ -1393,8 +1424,11 @@ function addOptimisticCard({ tempId, url, title, imgUrl, imgUrlDom = '', imgThum
     url,
     title,
     imgUrl,
-    imgUrlDom: (imgUrlDom || '').trim(),
-    // Phase 18b: stored for client-side dedup pre-check (url + imgUrl).
+    // === PHASE_ORIGIN_SOURCE ===
+    // origin_source used for dedup (replaces img_url-based dedup).
+    // See coreEntry.js PHASE_ORIGIN_SOURCE for rationale.
+    originSource,
+    // === END PHASE_ORIGIN_SOURCE ===
     cardContainer: container,
   });
 
@@ -3343,7 +3377,7 @@ if (chrome?.runtime?.onMessage) {
         url:               message.url,
         title:             message.title,
         imgUrl:            message.imgUrl || '',
-        imgUrlDom:         message.imgUrlDom || '',
+        originSource:      message.originSource || '',
         imgThumbnailB64:   message.imgThumbnailB64 || '',
         category:          message.category      || '',
         platform:          message.platform      || '',

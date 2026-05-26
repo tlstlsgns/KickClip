@@ -2092,6 +2092,37 @@ async function saveActiveCoreItem(request = {}) {
     // === END PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
     // === END PHASE_IMAGE_URL_PIPELINE ===
 
+    // === PHASE_ORIGIN_SOURCE ===
+    // origin_source is the canonical content identifier used for dedup
+    // (Firestore + sidepanel client-side). Distinct from img_url because
+    // video clips put a base64 data URL (canvas frame or tab screenshot)
+    // into img_url — that data URL changes between captures of the same
+    // video, making it unsuitable as a dedup key. origin_source uses the
+    // <video>.src for video dominants (stable URL identifying content) and
+    // mirrors img_url for image dominants (already a stable URL).
+    let originSource = '';
+    try {
+      const activeCoreEl = state.activeCoreItem;
+      if (activeCoreEl && typeof activeCoreEl.nodeType === 'number') {
+        const dominantEl = pickDominantImageElement(activeCoreEl);
+        if (dominantEl) {
+          const tag = String(dominantEl.tagName || '').toUpperCase();
+          if (tag === 'VIDEO') {
+            // resolved URL (blob:, https:, etc.); ignores <source> children
+            originSource = String(dominantEl.src || '').trim();
+          } else {
+            // IMG dominant — origin_source mirrors img_url (already a
+            // resolved high-res URL via resolveClipImageUrl, or YouTube
+            // thumbnail URL for YouTube saves)
+            originSource = String(imgUrl || '').trim();
+            // If imgUrl is a data URL (rare for image case but defensive),
+            // skip — data URLs are not stable dedup keys.
+            if (originSource.startsWith('data:')) originSource = '';
+          }
+        }
+      }
+    } catch (_) { /* defensive — leave originSource empty */ }
+    // === END PHASE_ORIGIN_SOURCE ===
 
     const payload = {
       url,
@@ -2102,6 +2133,7 @@ async function saveActiveCoreItem(request = {}) {
       ...(tempId ? { temp_id: tempId } : {}),
       ...(htmlContext ? { htmlContext } : {}),
       ...(imgUrl ? { img_url: imgUrl } : {}),
+      ...(originSource ? { origin_source: originSource } : {}),
     // === PHASE27G_PAYLOAD_DOM ===
       ...(domImgSrc && domImgSrc !== imgUrl
         ? { img_url_dom: domImgSrc }
@@ -2125,6 +2157,7 @@ async function saveActiveCoreItem(request = {}) {
           url,
           title:              title || url,
           imgUrl:             imgUrl || '',
+          ...(originSource ? { originSource } : {}),
     // === PHASE27G_OPTIMISTIC_DOM ===
           ...(domImgSrc && domImgSrc !== imgUrl
             ? { imgUrlDom: domImgSrc }
