@@ -33,6 +33,7 @@ import {
   extractYouTubeShortcodeFromUrl,
   getYouTubeThumbnailUrl,
   resolveAbsoluteImageUrl,
+  extractVideoMediaInfo,
 } from './dataExtractor.js';
 import {
   getKCShadowRoot,
@@ -44,6 +45,7 @@ import {
   determineTypeDOverlayElement,
   findDominantImagesInElement,
   findHoverCompanions,
+  isMediaElement,
 } from './itemDetector.js';
 import { getShortcut, onShortcutChange, matchesShortcut, formatShortcut } from './shortcutStore.js';
 
@@ -200,6 +202,43 @@ function waitForRepaint() {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
 }
+
+// === PHASE_KC_UI_HIDE_FOR_SCREENSHOT ===
+// Hide all KickClip overlays (highlight, badge, metadata tooltip) before
+// a tab screenshot capture. Returns the array of hidden elements with
+// their previous opacity values, to pass to restoreKCAfterScreenshot.
+function hideKCForScreenshot() {
+  const hidden = [];
+  try {
+    // Highlight overlay (main shadow root)
+    const overlay = getKCShadowElement('kickclip-highlight-overlay');
+    if (overlay && overlay.style.opacity !== '0') {
+      hidden.push({ el: overlay, prevOpacity: overlay.style.opacity });
+      overlay.style.opacity = '0';
+    }
+    // Status badge (badge shadow root)
+    const badge = getKCBadgeShadowElement('kickclip-status-badge-core');
+    if (badge && badge.style.opacity !== '0') {
+      hidden.push({ el: badge, prevOpacity: badge.style.opacity });
+      badge.style.opacity = '0';
+    }
+    // Metadata tooltip (badge shadow root)
+    const tooltip = getKCBadgeShadowElement(METADATA_TOOLTIP_ID);
+    if (tooltip && tooltip.style.opacity !== '0') {
+      hidden.push({ el: tooltip, prevOpacity: tooltip.style.opacity });
+      tooltip.style.opacity = '0';
+    }
+  } catch (_) { /* defensive */ }
+  return hidden;
+}
+
+function restoreKCAfterScreenshot(hidden) {
+  if (!Array.isArray(hidden)) return;
+  for (const { el, prevOpacity } of hidden) {
+    try { el.style.opacity = prevOpacity; } catch (_) {}
+  }
+}
+// === END PHASE_KC_UI_HIDE_FOR_SCREENSHOT ===
 
 /**
  * Temporarily hides purple overlay + metadata tooltip (opacity 0, layout preserved).
@@ -1511,19 +1550,42 @@ function mountObservers() {
       for (const mutation of mutations) {
         if (isYouTube && mutation.target?.closest?.('#video-preview')) continue;
         // === PHASE20_HOTFIX_SRC_MUTATION ===
-        // React to <img src> attribute mutations (lazy-load real swap).
+        // React to <img src> / <video src> attribute mutations (lazy-load real swap).
         if (
           mutation.type === 'attributes' &&
           mutation.attributeName === 'src' &&
-          mutation.target?.nodeType === 1 &&
-          String(mutation.target.tagName || '').toUpperCase() === 'IMG'
+          mutation.target?.nodeType === 1
         ) {
-          // Skip noise sources
-          if (mutation.target.closest?.('#video-preview') || mutation.target.closest?.('ytd-miniplayer')) continue;
-          schedulePreScan(document, false, 'mutation-img-src');
-          return;
+          const srcTag = String(mutation.target.tagName || '').toUpperCase();
+          if (srcTag === 'IMG' || srcTag === 'VIDEO') {
+            // Skip noise sources
+            if (mutation.target.closest?.('#video-preview') || mutation.target.closest?.('ytd-miniplayer')) continue;
+            schedulePreScan(document, false, 'mutation-media-src');
+            return;
+          }
         }
         // === END PHASE20_HOTFIX_SRC_MUTATION ===
+
+        // === PHASE_VIDEO_STYLE_MUTATION ===
+        // <video> style toggles (display:none ↔ block on Dribbble's
+        // hover-play pattern, carousel slide visibility, etc.) change
+        // the video's layout rect. The dominant-image computation
+        // depends on layout rect, so a video that becomes visible (or
+        // hidden) must trigger a rescan to refresh seedImages and
+        // hoverCompanions. attributeFilter includes 'style' (above);
+        // other elements' style mutations are filtered out here to
+        // bound noise — only <video> style changes trigger rescan.
+        if (
+          mutation.type === 'attributes' &&
+          mutation.attributeName === 'style' &&
+          mutation.target?.nodeType === 1 &&
+          String(mutation.target.tagName || '').toUpperCase() === 'VIDEO'
+        ) {
+          if (mutation.target.closest?.('#video-preview') || mutation.target.closest?.('ytd-miniplayer')) continue;
+          schedulePreScan(document, false, 'mutation-video-style');
+          return;
+        }
+        // === END PHASE_VIDEO_STYLE_MUTATION ===
         for (const node of mutation.addedNodes) {
           if (node.nodeType !== 1) continue;
           if (NON_VISUAL_TAGS.has(String(node.tagName || '').toUpperCase())) continue;
@@ -1556,7 +1618,7 @@ function mountObservers() {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['src'],
+      attributeFilter: ['src', 'style'],
     });
     // === END PHASE20_HOTFIX_SRC_MUTATION ===
 
@@ -1747,16 +1809,34 @@ async function saveActiveCoreItem(request = {}) {
           const dominantImgs = findDominantImagesInElement(activeCoreEl);
           const dominantImg = dominantImgs.values().next().value || null;
           if (dominantImg) {
-            const r = dominantImg.getBoundingClientRect?.();
-            const src = resolveAbsoluteImageUrl(
-              dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src
-            );
-            if (src && r && r.width > 0 && r.height > 0) {
-              freshImage = {
-                url: src,
-                width: Math.round(r.width),
-                height: Math.round(r.height),
-              };
+            const dominantTag = String(dominantImg.tagName || '').toUpperCase();
+            if (dominantTag === 'VIDEO') {
+              const info = extractVideoMediaInfo(dominantImg);
+              const r = dominantImg.getBoundingClientRect?.();
+              const width = info?.width || Math.round(r?.width || 0);
+              const height = info?.height || Math.round(r?.height || 0);
+              if (width > 0 && height > 0) {
+                freshImage = {
+                  // url is set later from clipResult.dataUrlPromise
+                  // (canvas frame base64). See PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL
+                  // in saveActiveCoreItem imgUrl resolution.
+                  url: '',
+                  width,
+                  height,
+                };
+              }
+            } else {
+              const r = dominantImg.getBoundingClientRect?.();
+              const src = resolveAbsoluteImageUrl(
+                dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src
+              );
+              if (src && r && r.width > 0 && r.height > 0) {
+                freshImage = {
+                  url: src,
+                  width: Math.round(r.width),
+                  height: Math.round(r.height),
+                };
+              }
             }
           }
         } else {
@@ -1787,7 +1867,7 @@ async function saveActiveCoreItem(request = {}) {
     const isYouTubeSave = !!youtubeThumbnailUrl;
 
     const title = String(meta?.title || document.title || url).trim();
-    const imgUrl = isYouTubeSave
+    let imgUrl = isYouTubeSave
       ? youtubeThumbnailUrl
       : String(request?.img_url || freshImage?.url || '').trim();
 
@@ -1887,40 +1967,6 @@ async function saveActiveCoreItem(request = {}) {
     if (coreBadgeEl)   { coreBadgeEl.style.transition = '';   coreBadgeEl.style.opacity = ''; }
 
     // Request userId from background.js (cached from sidepanel sign-in)
-    let userId = null;
-    try {
-      // First attempt — service worker may be asleep
-      const userIdResponse = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({ action: 'get-cached-user-id' }, (response) => {
-          if (chrome.runtime.lastError) {
-            // Service worker was asleep or not ready — resolve with null to trigger retry
-            resolve(null);
-          } else {
-            resolve(response);
-          }
-        });
-      });
-
-      if (userIdResponse?.userId) {
-        userId = userIdResponse.userId;
-      } else {
-        // Retry once after a short delay to allow service worker to wake up
-        await new Promise((r) => setTimeout(r, 150));
-        const retryResponse = await new Promise((resolve) => {
-          chrome.runtime.sendMessage({ action: 'get-cached-user-id' }, (response) => {
-            if (chrome.runtime.lastError) {
-              resolve(null);
-            } else {
-              resolve(response);
-            }
-          });
-        });
-        userId = retryResponse?.userId || null;
-      }
-    } catch {
-      userId = null;
-    }
-
     // === PHASE27G_DOM_IMG_SRC ===
     // Capture the actual <img> src visible in the page at clip
     // time. For Cloudflare-protected origins where img_url cannot
@@ -1962,12 +2008,52 @@ async function saveActiveCoreItem(request = {}) {
       // defensive — leave domImgSrc empty
     }
     // === END PHASE27G_DOM_IMG_SRC ===
+    let userId = null;
+    try {
+      // First attempt — service worker may be asleep
+      const userIdResponse = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'get-cached-user-id' }, (response) => {
+          if (chrome.runtime.lastError) {
+            // Service worker was asleep or not ready — resolve with null to trigger retry
+            resolve(null);
+          } else {
+            resolve(response);
+          }
+        });
+      });
+
+      if (userIdResponse?.userId) {
+        userId = userIdResponse.userId;
+      } else {
+        // Retry once after a short delay to allow service worker to wake up
+        await new Promise((r) => setTimeout(r, 150));
+        const retryResponse = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ action: 'get-cached-user-id' }, (response) => {
+            if (chrome.runtime.lastError) {
+              resolve(null);
+            } else {
+              resolve(response);
+            }
+          });
+        });
+        userId = retryResponse?.userId || null;
+      }
+    } catch {
+      userId = null;
+    }
 
     // Extract HTML context from the active CoreItem for AI type inference
     const htmlContext = extractCoreItemHtmlContext(activeItem);
 
     // === PHASE_IMAGE_URL_PIPELINE ===
     let imgThumbnailB64 = null;
+    // === PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
+    // When the dominant element is <video>, the same canvas frame
+    // that produced the clipboard Blob is also exposed as a data URL
+    // via clipResult.dataUrlPromise. We capture it here and override
+    // the imgUrl variable (computed below) for the video case.
+    let videoFrameDataUrl = null;
+    // === END PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
     if (request?.clipboardPromise) {
       try {
         const clipResult = await Promise.resolve(request.clipboardPromise);
@@ -1977,11 +2063,36 @@ async function saveActiveCoreItem(request = {}) {
             new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
           ]);
         }
+        // === PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
+        if (clipResult?.dataUrlPromise) {
+          videoFrameDataUrl = await Promise.race([
+            clipResult.dataUrlPromise,
+            new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
+          ]);
+        }
+        // === END PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
       } catch (_) {
         imgThumbnailB64 = null;
+        videoFrameDataUrl = null;
       }
     }
+    // === PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
+    // Resolution priority:
+    //   1. YouTube special path (existing) — youtubeThumbnailUrl
+    //   2. Video frame data URL from clipboard pipeline (new) — when present,
+    //      this is the canvas frame captured at clip-time keystroke,
+    //      matching the clipboard PNG and img_thumbnail_b64 exactly.
+    //   3. Existing fallback: request.img_url, freshImage.url, or ''.
+    if (isYouTubeSave) {
+      imgUrl = youtubeThumbnailUrl;
+    } else if (videoFrameDataUrl) {
+      imgUrl = videoFrameDataUrl;
+    } else {
+      imgUrl = String(request?.img_url || freshImage?.url || '').trim();
+    }
+    // === END PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
     // === END PHASE_IMAGE_URL_PIPELINE ===
+
 
     const payload = {
       url,
@@ -1992,14 +2103,14 @@ async function saveActiveCoreItem(request = {}) {
       ...(tempId ? { temp_id: tempId } : {}),
       ...(htmlContext ? { htmlContext } : {}),
       ...(imgUrl ? { img_url: imgUrl } : {}),
-      // === PHASE_IMAGE_URL_PIPELINE ===
-      ...(imgThumbnailB64 ? { img_thumbnail_b64: imgThumbnailB64 } : {}),
-      // === END PHASE_IMAGE_URL_PIPELINE ===
-      // === PHASE27G_PAYLOAD_DOM ===
+    // === PHASE27G_PAYLOAD_DOM ===
       ...(domImgSrc && domImgSrc !== imgUrl
         ? { img_url_dom: domImgSrc }
         : {}),
       // === END PHASE27G_PAYLOAD_DOM ===
+      // === PHASE_IMAGE_URL_PIPELINE ===
+      ...(imgThumbnailB64 ? { img_thumbnail_b64: imgThumbnailB64 } : {}),
+      // === END PHASE_IMAGE_URL_PIPELINE ===
       ...(userId ? { userId } : {}),
       ...(meta?.category      ? { category:       meta.category }      : {}),
       ...(meta?.platform      ? { platform:        meta.platform }      : {}),
@@ -2015,14 +2126,14 @@ async function saveActiveCoreItem(request = {}) {
           url,
           title:              title || url,
           imgUrl:             imgUrl || '',
-          // === PHASE_IMAGE_URL_PIPELINE ===
-          ...(imgThumbnailB64 ? { imgThumbnailB64 } : {}),
-          // === END PHASE_IMAGE_URL_PIPELINE ===
-          // === PHASE27G_OPTIMISTIC_DOM ===
+    // === PHASE27G_OPTIMISTIC_DOM ===
           ...(domImgSrc && domImgSrc !== imgUrl
             ? { imgUrlDom: domImgSrc }
             : {}),
           // === END PHASE27G_OPTIMISTIC_DOM ===
+          // === PHASE_IMAGE_URL_PIPELINE ===
+          ...(imgThumbnailB64 ? { imgThumbnailB64 } : {}),
+          // === END PHASE_IMAGE_URL_PIPELINE ===
           category:           String(meta?.category      || '').trim(),
           platform:           String(meta?.platform      || '').trim(),
           createdAt:          Date.now(),
@@ -2058,6 +2169,26 @@ async function saveActiveCoreItem(request = {}) {
 function pickDominantImageElement(rootElement) {
   if (!rootElement || !(rootElement instanceof Element)) return null;
   try {
+    // === PHASE_TYPE_E_DOMINANT_SELF ===
+    // Type E candidate.element IS the media element (<img>/<video>),
+    // not a container wrapper. findDominantImagesInElement searches
+    // a container's media descendants — a <video> has no media
+    // descendants, so the call returns empty for Type E. The dominant
+    // for Type E IS the element itself; return it directly.
+    //
+    // Type B/D pass cards/wrappers as rootElement (not media elements),
+    // so this branch is skipped and the descendant walk runs as before.
+    //
+    // Type E + image previously masked this gap: the clipboard pipeline
+    // takes the URL-fetch path because extractImageFromCoreItem produces
+    // a non-empty imageUrl for <img>. Type E + video has empty imageUrl
+    // when there's no poster (Instagram never sets poster on
+    // <video src="blob:...">), so it falls through to the
+    // pickDominantImageElement → videoElementToBlob path — which is
+    // where pickDominantImageElement(video) = null surfaced as
+    // silent clipboard failure.
+    if (isMediaElement(rootElement)) return rootElement;
+    // === END PHASE_TYPE_E_DOMINANT_SELF ===
     const imgs = findDominantImagesInElement(rootElement);
     return imgs.values().next().value || null;
   } catch (_) {
@@ -2111,14 +2242,19 @@ async function blobToThumbnailDataUrl(blob) {
   }
 }
 
-function attachThumbnailPromiseToClipboardWrite(blobPromise) {
+function attachThumbnailPromiseToClipboardWrite(blobPromise, dataUrlPromise = null) {
+  // dataUrlPromise is the optional video img_url path: when the dominant
+  // element is <video>, the same canvas drawImage produces both the
+  // clipboard Blob and a base64 data URL for img_url. Image-case callers
+  // (poster URL fetch, image URL fetch) pass nothing — img_url is the
+  // original image URL string in those cases and doesn't need this path.
   const thumbnailPromise = Promise.resolve(blobPromise)
     .then((blob) => blobToThumbnailDataUrl(blob))
     .catch(() => null);
   return navigator.clipboard
     .write([new ClipboardItem({ 'image/png': blobPromise })])
-    .then(() => ({ success: true, thumbnailPromise }))
-    .catch(() => ({ success: false, thumbnailPromise }));
+    .then(() => ({ success: true, thumbnailPromise, dataUrlPromise }))
+    .catch(() => ({ success: false, thumbnailPromise, dataUrlPromise }));
 }
 // === END PHASE_IMAGE_URL_PIPELINE ===
 
@@ -2191,7 +2327,15 @@ function prefetchImageBlob(imageUrl, fallbackImgEl = null) {
     } catch (_) { /* fall through */ }
     if (fallbackImgEl) {
       try {
-        const b = await imgElementToBlob(fallbackImgEl);
+        const fallbackTag = String(fallbackImgEl.tagName || '').toUpperCase();
+        let b;
+        // === PHASE_VIDEO_CLIP_CLIPBOARD ===
+        if (fallbackTag === 'VIDEO') {
+          b = await videoElementToBlob(fallbackImgEl);
+        } else {
+          b = await imgElementToBlob(fallbackImgEl);
+        }
+        // === END PHASE_VIDEO_CLIP_CLIPBOARD ===
         if (b) return b;
       } catch (_) { /* fall through */ }
     }
@@ -2374,6 +2518,180 @@ async function imgElementToBlob(imgEl) {
   }
 }
 
+// === PHASE_VIDEO_BLOB_HELPERS ===
+// Canvas first-frame capture for <video>. Used by the clipboard +
+// img_url paths when the dominant element is <video> and no poster
+// URL was available (extractVideoMediaInfo returned posterUrl='').
+//
+// Mechanics:
+//   - canvas.drawImage(video, ...) captures the current frame at the
+//     video's currentTime. The Dribbble flow triggers this after the
+//     hover state has played at least one frame, so capture is generally
+//     usable; for unloaded videos (readyState < 2) the frame may be
+//     blank — we detect via videoWidth/Height being 0 and return null.
+//   - Cross-origin videos without explicit crossOrigin='anonymous' attr
+//     produce tainted canvases; toBlob then throws. Caught and null
+//     returned so the clipboard pipeline falls through to "no copy".
+//   - Resizes to maxDim (default 800) preserving aspect ratio.
+// === PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
+// Single-pass canvas capture: one drawImage produces both the Blob
+// (clipboard + thumbnail source) and the data URL (img_url source).
+// Guarantees clipboard/thumbnail/img_url are all the same frame —
+// the frame the user saw at clip-time keystroke.
+//
+// Returns { blob, dataUrl } or null on any failure. Either field may
+// be null individually if its serialization (toBlob / toDataURL) fails
+// (e.g., tainted canvas only fails some paths) — callers must guard.
+
+// === PHASE_VIDEO_TAB_SCREENSHOT_FALLBACK ===
+// Tab-screenshot fallback for <video> elements where:
+// - Canvas serialization is tainted (cross-origin video without CORS)
+// - Poster attribute is empty or proxy fetch fails
+//
+// Uses chrome.tabs.captureVisibleTab via background script to get a PNG
+// of the visible viewport, then crops to the video's rect (DPR-adjusted)
+// and resizes to maxDim. Returns { blob, dataUrl } or null.
+//
+// Hides KickClip overlays/badges/tooltip during capture so they don't
+// appear in the cropped output. Uses 2 RAFs for repaint settle. Restore
+// in finally block guarantees UI returns to prior state even on error.
+async function captureVideoViaTabScreenshot(videoEl, maxDim) {
+  // Viewport bounds check
+  const rect = videoEl?.getBoundingClientRect?.();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  if (rect.bottom <= 0 || rect.top >= window.innerHeight) return null;
+  if (rect.right <= 0 || rect.left >= window.innerWidth) return null;
+
+  const hidden = hideKCForScreenshot();
+  let result = null;
+  try {
+    // Wait 2 RAFs for the opacity change to paint
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    // 1. Request screenshot from background
+    const screenshotDataUrl = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          { action: 'capture-visible-tab' },
+          (response) => {
+            if (chrome.runtime.lastError) resolve(null);
+            else resolve(response?.dataUrl || null);
+          }
+        );
+      } catch (_) {
+        resolve(null);
+      }
+    });
+
+    if (!screenshotDataUrl) return null;
+
+    // 2. Load screenshot into an Image
+    const img = new Image();
+    img.src = screenshotDataUrl;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('Screenshot image load failed'));
+    });
+
+    // 3. Compute crop rect (DPR-adjusted)
+    const dpr = Number(window.devicePixelRatio) || 1;
+    const sourceX = Math.max(0, Math.round(rect.left * dpr));
+    const sourceY = Math.max(0, Math.round(rect.top * dpr));
+    const sourceW = Math.round(rect.width * dpr);
+    const sourceH = Math.round(rect.height * dpr);
+    if (sourceW <= 0 || sourceH <= 0) return null;
+
+    // 4. Crop + resize to maxDim
+    const scale = Math.min(maxDim / sourceW, maxDim / sourceH, 1);
+    const destW = Math.max(1, Math.round(sourceW * scale));
+    const destH = Math.max(1, Math.round(sourceH * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = destW;
+    canvas.height = destH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, sourceX, sourceY, sourceW, sourceH, 0, 0, destW, destH);
+
+    // 5. Serialize (tab screenshot is extension-origin — no taint)
+    let dataUrl = null;
+    try { dataUrl = canvas.toDataURL('image/png'); } catch (_) {}
+    const blob = await new Promise((resolve) => {
+      try { canvas.toBlob((b) => resolve(b || null), 'image/png'); }
+      catch (_) { resolve(null); }
+    });
+
+    if (blob || dataUrl) {
+      result = { blob, dataUrl };
+    }
+  } catch (_) {
+    /* fall through to finally */
+  } finally {
+    restoreKCAfterScreenshot(hidden);
+  }
+  return result;
+}
+// === END PHASE_VIDEO_TAB_SCREENSHOT_FALLBACK ===
+
+async function videoElementToBlobAndDataUrl(videoEl, maxDim = 1200) {
+  if (!videoEl || String(videoEl.tagName || '').toUpperCase() !== 'VIDEO') return null;
+  const srcW = Number(videoEl.videoWidth) || 0;
+  const srcH = Number(videoEl.videoHeight) || 0;
+  if (srcW <= 0 || srcH <= 0) return null;
+  try {
+    const scale = Math.min(maxDim / srcW, maxDim / srcH, 1);
+    const dstW = Math.max(1, Math.round(srcW * scale));
+    const dstH = Math.max(1, Math.round(srcH * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = dstW;
+    canvas.height = dstH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(videoEl, 0, 0, dstW, dstH);
+    // dataURL is sync (and throws SecurityError on tainted canvas)
+    let dataUrl = null;
+    try {
+      dataUrl = canvas.toDataURL('image/png');
+    } catch (_) {
+      dataUrl = null;
+    }
+    // Blob is async via toBlob callback (also fails on tainted)
+    const blob = await new Promise((resolve) => {
+      try {
+        canvas.toBlob((b) => resolve(b || null), 'image/png');
+      } catch (_) {
+        resolve(null);
+      }
+    });
+    if (blob || dataUrl) {
+      return { blob, dataUrl };
+    }
+    // Canvas tainted (cross-origin <video> without CORS headers, no
+    // crossOrigin="anonymous" attribute). drawImage works but
+    // toDataURL/toBlob throw SecurityError. Fall back to tab screenshot
+    // crop — see PHASE_VIDEO_TAB_SCREENSHOT_FALLBACK.
+    try {
+      const screenshotResult = await captureVideoViaTabScreenshot(videoEl, maxDim);
+      if (screenshotResult) return screenshotResult;
+    } catch (_) {
+      // tab screenshot failed — fall through to null
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Backward-compatible wrapper: returns just the Blob.
+// Existing callers (prefetchImageBlob, performClipboardCopy, etc.)
+// don't need the data URL and continue to use this thin wrapper.
+async function videoElementToBlob(videoEl, maxDim = 1200) {
+  const result = await videoElementToBlobAndDataUrl(videoEl, maxDim);
+  return result?.blob || null;
+}
+// === END PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
+// === END PHASE_VIDEO_BLOB_HELPERS ===
+
 /**
  * Decode a data URL (from background fetch) into a fresh PNG Blob by rendering
  * it to an offscreen canvas. Because the image was fetched via the extension's
@@ -2513,6 +2831,29 @@ function performSyncClipboardWrite(state) {
   const imageUrl = String(meta.image?.url || '').trim();
   const activeItem = state.activeCoreItem;
 
+  // === PHASE_VIDEO_DOMINANT_AUTHORITATIVE ===
+  // Dominant <video> takes precedence over any non-empty meta.image.url.
+  // The user-locked decision is "video dominant → always clip-time canvas
+  // frame for clipboard, img_url, and thumbnail." Any stale or fallback
+  // value in meta.image.url (e.g., poster URL from a prior extraction,
+  // race-condition snapshot) would otherwise route the flow to the
+  // imageUrl branch below, which calls attachThumbnailPromiseToClipboardWrite
+  // WITHOUT the dataUrlPromise second argument — meaning saveActiveCoreItem's
+  // videoFrameDataUrl is null and img_url ends up empty, even when the
+  // user clearly clipped a video. Checking dominant element type first
+  // and routing to videoElementToBlobAndDataUrl restores correctness.
+  if (activeItem instanceof Element) {
+    const dominantElPriority = pickDominantImageElement(activeItem);
+    if (dominantElPriority && String(dominantElPriority.tagName || '').toUpperCase() === 'VIDEO') {
+      const combinedPromise = videoElementToBlobAndDataUrl(dominantElPriority, 1200)
+        .catch(() => null);
+      const blobPromise = combinedPromise.then((r) => r?.blob || null);
+      const dataUrlPromise = combinedPromise.then((r) => r?.dataUrl || null);
+      return attachThumbnailPromiseToClipboardWrite(blobPromise, dataUrlPromise);
+    }
+  }
+  // === END PHASE_VIDEO_DOMINANT_AUTHORITATIVE ===
+
   if (imageUrl) {
     const blobPromise = (async () => {
       try {
@@ -2522,10 +2863,18 @@ function performSyncClipboardWrite(state) {
         if (raced) return raced;
       } catch (_) { /* fall through */ }
       if (activeItem instanceof Element) {
-        const imgEl = pickDominantImageElement(activeItem);
-        if (imgEl) {
+        const dominantEl = pickDominantImageElement(activeItem);
+        if (dominantEl) {
           try {
-            const b = await imgElementToBlob(imgEl);
+            const dominantTag = String(dominantEl.tagName || '').toUpperCase();
+            let b;
+            // === PHASE_VIDEO_CLIP_CLIPBOARD ===
+            if (dominantTag === 'VIDEO') {
+              b = await videoElementToBlob(dominantEl);
+            } else {
+              b = await imgElementToBlob(dominantEl);
+            }
+            // === END PHASE_VIDEO_CLIP_CLIPBOARD ===
             if (b) return b;
           } catch (_) { /* fall through */ }
         }
@@ -2535,6 +2884,26 @@ function performSyncClipboardWrite(state) {
     // === PHASE_IMAGE_URL_PIPELINE ===
     return attachThumbnailPromiseToClipboardWrite(blobPromise);
     // === END PHASE_IMAGE_URL_PIPELINE ===
+  }
+
+  // Defensive fallback — under normal flow this branch is unreachable
+  // because PHASE_VIDEO_DOMINANT_AUTHORITATIVE at the top of this function
+  // returns early when the dominant element is <video>. Kept as a safety
+  // net for edge cases (e.g., activeItem reassigned between the top check
+  // and here in a defensive structure) and for code clarity.
+  // Video dominant — always use canvas frame for clipboard+thumbnail+img_url.
+  // (Poster URL is no longer consulted; canvas frame is the source of truth
+  // for all three outputs. See PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL.)
+  if (activeItem instanceof Element) {
+    const dominantEl = pickDominantImageElement(activeItem);
+    if (dominantEl && String(dominantEl.tagName || '').toUpperCase() === 'VIDEO') {
+      // Single drawImage produces both blob and dataUrl — same frame.
+      const combinedPromise = videoElementToBlobAndDataUrl(dominantEl, 1200)
+        .catch(() => null);
+      const blobPromise = combinedPromise.then((r) => r?.blob || null);
+      const dataUrlPromise = combinedPromise.then((r) => r?.dataUrl || null);
+      return attachThumbnailPromiseToClipboardWrite(blobPromise, dataUrlPromise);
+    }
   }
 
   return null;
@@ -2558,9 +2927,16 @@ async function performClipboardCopy(category, url, rootElementForDominant, optio
           // === END PHASE_CLIPBOARD_TIMEOUT_FALLBACK ===
         } catch (_) { /* fall through */ }
         if (!blob && rootElementForDominant instanceof Element) {
-          const imgEl = pickDominantImageElement(rootElementForDominant);
-          if (imgEl) {
-            blob = await imgElementToBlob(imgEl);
+          const dominantEl = pickDominantImageElement(rootElementForDominant);
+          if (dominantEl) {
+            const dominantTag = String(dominantEl.tagName || '').toUpperCase();
+            // === PHASE_VIDEO_CLIP_CLIPBOARD ===
+            if (dominantTag === 'VIDEO') {
+              blob = await videoElementToBlob(dominantEl);
+            } else {
+              blob = await imgElementToBlob(dominantEl);
+            }
+            // === END PHASE_VIDEO_CLIP_CLIPBOARD ===
           }
         }
         if (blob) {
@@ -2570,6 +2946,19 @@ async function performClipboardCopy(category, url, rootElementForDominant, optio
           return { success: true };
         }
       } catch (_) { /* fall through */ }
+    } else if (rootElementForDominant instanceof Element) {
+      const dominantEl = pickDominantImageElement(rootElementForDominant);
+      if (dominantEl && String(dominantEl.tagName || '').toUpperCase() === 'VIDEO') {
+        try {
+          const blob = await videoElementToBlob(dominantEl);
+          if (blob) {
+            await navigator.clipboard.write([
+              new ClipboardItem({ [blob.type || 'image/png']: blob })
+            ]);
+            return { success: true };
+          }
+        } catch (_) { /* fall through */ }
+      }
     }
     return { success: false };
   } catch (err) {

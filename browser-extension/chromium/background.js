@@ -874,6 +874,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     })();
     return true;
   }
+
+  // === PHASE_TAB_SCREENSHOT_HANDLER ===
+  // Capture the visible viewport of the active tab for video clip
+  // fallback (when canvas drawImage is tainted and poster URL is absent).
+  // Content script crops to video rect on its side.
+  if (request.action === 'capture-visible-tab') {
+    try {
+      chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ dataUrl: null, error: chrome.runtime.lastError.message });
+        } else {
+          sendResponse({ dataUrl: dataUrl || null });
+        }
+      });
+    } catch (e) {
+      sendResponse({ dataUrl: null, error: String(e?.message || e) });
+    }
+    return true;  // async response
+  }
+  // === END PHASE_TAB_SCREENSHOT_HANDLER ===
   
   if (request.action === 'get-instagram-thumbnail') {
     // Handle async operation (legacy support)

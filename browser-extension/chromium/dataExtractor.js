@@ -1346,6 +1346,46 @@ function extractInstagramCaptionFromCoreItem(coreItem) {
   }
 }
 
+// === PHASE_VIDEO_CLIP ===
+// Step 2 of <video> support: clip-time URL / thumbnail / clipboard
+// generation when the dominant element is <video>. Three pieces work
+// together: this helper extracts the static info (poster URL if any),
+// extractImageFromCoreItem and extractMetadataForCoreItem branch on
+// dominant element type, and coreEntry's videoElementToBlob handles
+// canvas first-frame capture for the no-poster path.
+//
+// Returns null when the element isn't a <video> or no usable info is
+// available. When the element is a <video>:
+//   - posterUrl: resolveAbsoluteImageUrl(video.poster) or '' if absent
+//   - width/height: video.videoWidth/Height (intrinsic) or layout rect
+//     fallback for the rare videoWidth=0 case (video not yet loaded)
+export function extractVideoMediaInfo(video) {
+  try {
+    if (!video || String(video.tagName || '').toUpperCase() !== 'VIDEO') return null;
+    const posterRaw = video.getAttribute?.('poster') || '';
+    const posterUrl = posterRaw ? resolveAbsoluteImageUrl(posterRaw) : '';
+    const vw = Number(video.videoWidth) || 0;
+    const vh = Number(video.videoHeight) || 0;
+    if (vw > 0 && vh > 0) {
+      return { posterUrl, width: vw, height: vh };
+    }
+    const r = video.getBoundingClientRect?.();
+    const lw = Math.round(Math.max(0, Number(r?.width || 0)));
+    const lh = Math.round(Math.max(0, Number(r?.height || 0)));
+    if (lw > 0 && lh > 0) {
+      return { posterUrl, width: lw, height: lh };
+    }
+    // Last resort: posterUrl alone, no dimensions (caller treats as
+    // "best effort" and may compute dims downstream from the poster
+    // image after fetch).
+    return { posterUrl, width: 0, height: 0 };
+  } catch (e) {
+    return null;
+  }
+}
+// === END PHASE_VIDEO_CLIP ===
+
+
 export function extractImageFromCoreItem(coreItem) {
   try {
     if (!coreItem || !coreItem.querySelectorAll) return null;
@@ -1386,6 +1426,35 @@ export function extractImageFromCoreItem(coreItem) {
       }
     }
     // === END PHASE27F_TYPE_E_IMG_SHORTCUT ===
+
+    // === PHASE_VIDEO_CLIP_TYPE_E ===
+    // Type E shortcut for <video>: parallel to the IMG branch above.
+    // Returns the poster URL when present; canvas first-frame capture
+    // and base64 fallback are handled by the clipboard pipeline in
+    // coreEntry, not here. When no poster is set, image.url is '' and
+    // the caller signals "no image URL available from extraction" so
+    // downstream (extractMetadataForCoreItem) treats this as a video
+    // that needs canvas capture at clip time.
+    if (String(coreItem.tagName || '').toUpperCase() === 'VIDEO') {
+      const info = extractVideoMediaInfo(coreItem);
+      if (info) {
+        return {
+          image: {
+            // Always '' — clip-time canvas frame replaces both posterUrl
+            // and image URL paths. The actual img_url is produced at clip
+            // time by videoElementToBlobAndDataUrl in coreEntry, ensuring
+            // clipboard/thumbnail/img_url all come from the same captured
+            // frame. extractVideoMediaInfo still reports posterUrl for
+            // future use; this branch just ignores it.
+            url: '',
+            width: info.width,
+            height: info.height,
+          },
+          usedCustomLogic: false,
+        };
+      }
+    }
+    // === END PHASE_VIDEO_CLIP_TYPE_E ===
 
     const platform = getCurrentPlatform();
     if (platform === SUPPORTED_PLATFORMS.THREADS) {
@@ -3432,20 +3501,49 @@ export function extractMetadataForCoreItem(coreItem, closestAtag = null, hovered
       const dominantImgs = findDominantImagesInElement(coreItem);
       const dominantImg = dominantImgs.values().next().value || null;
       if (dominantImg) {
-        const r = dominantImg.getBoundingClientRect?.();
-        const src = resolveAbsoluteImageUrl(
-          dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src
-        );
-        if (src && r && r.width > 0 && r.height > 0) {
-          image = {
-            url: src,
-            width: Math.round(r.width),
-            height: Math.round(r.height),
-          };
-          imageIsCustom = true;
+        // === PHASE_VIDEO_CLIP_TYPE_BD ===
+        // Branch on dominant element type. <video> uses the poster URL
+        // when available; canvas first-frame capture happens later in
+        // the clipboard pipeline (coreEntry videoElementToBlob). When
+        // no poster, url is '' — the metadata still records the video's
+        // layout dimensions so consumers can render placeholder UI, and
+        // the clipboard pipeline still attempts canvas capture.
+        const dominantTag = String(dominantImg.tagName || '').toUpperCase();
+        if (dominantTag === 'VIDEO') {
+          const info = extractVideoMediaInfo(dominantImg);
+          const r = dominantImg.getBoundingClientRect?.();
+          const width = info?.width || Math.round(r?.width || 0);
+          const height = info?.height || Math.round(r?.height || 0);
+          if (width > 0 && height > 0) {
+            image = {
+              // Always '' — see extractImageFromCoreItem VIDEO branch
+              // for the rationale. The clip-time img_url is produced
+              // from videoElementToBlobAndDataUrl in coreEntry.
+              url: '',
+              width,
+              height,
+            };
+            imageIsCustom = true;
+          } else {
+            image = null;
+          }
         } else {
-          image = null;
+          const r = dominantImg.getBoundingClientRect?.();
+          const src = resolveAbsoluteImageUrl(
+            dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src
+          );
+          if (src && r && r.width > 0 && r.height > 0) {
+            image = {
+              url: src,
+              width: Math.round(r.width),
+              height: Math.round(r.height),
+            };
+            imageIsCustom = true;
+          } else {
+            image = null;
+          }
         }
+        // === END PHASE_VIDEO_CLIP_TYPE_BD ===
       } else {
         image = null;
       }
@@ -3636,10 +3734,17 @@ export function detectItemCategory(savedUrl, pageUrl, htmlContext) {
     }
 
     // ── Step 2: Dominant media check (non-SNS) ────────────────────────────────
-    // Only DOMINANT IMAGE classifies as Image category.
-    // Dominant Video falls through to the null-category default — Video is not a distinct category.
+    // BOTH dominant image AND dominant video classify as Image category.
+    // KickClip's clip output for a dominant <video> is a still image artifact
+    // (canvas frame data URL via videoElementToBlobAndDataUrl, or poster URL
+    // fallback via PHASE_VIDEO_POSTER_FALLBACK on tainted canvas). The stored
+    // payload's img_url / img_thumbnail_b64 are PNG data URLs, so categorizing
+    // as 'Image' reflects what KickClip actually saves. getDominantMediaType()
+    // still distinguishes 'Image' vs 'Video' internally — the flattening to
+    // a single 'Image' category is a caller-side decision so future logic can
+    // re-differentiate if needed.
     const dominantType = getDominantMediaType();
-    if (dominantType === 'Image') {
+    if (dominantType === 'Image' || dominantType === 'Video') {
       return { category: 'Image', platform: getPageDomain() };
     }
 

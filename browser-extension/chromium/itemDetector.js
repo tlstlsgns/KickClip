@@ -547,6 +547,67 @@ function getShareButtonRelativeDepth(el) {
   }
 }
 
+// === PHASE_VIDEO_MEDIA_PARITY ===
+// Step 1 of <video> support: <img> and <video> are treated identically
+// for ItemMap detection, hover activation, and overlay rendering.
+// Clip-time URL/thumbnail extraction is handled separately in Step 2.
+//
+// Helpers below abstract the "media element" predicate, intrinsic size
+// access, and selector-result canonicalization. Variable names elsewhere
+// (findDominantImagesInElement, processedImages, significantImages, etc.)
+// retain the historical "Images" naming for diff minimization; their
+// scope now includes <video> as a first-class media element.
+export function isMediaElement(el) {
+  if (!el || el.nodeType !== 1) return false;
+  const tag = String(el.tagName || '').toUpperCase();
+  return tag === 'IMG' || tag === 'VIDEO';
+}
+
+function getMediaIntrinsicSize(el) {
+  if (!el || el.nodeType !== 1) {
+    return { width: 0, height: 0 };
+  }
+  const tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'IMG') {
+    return {
+      width: Number(el.naturalWidth || 0),
+      height: Number(el.naturalHeight || 0),
+    };
+  }
+  if (tag === 'VIDEO') {
+    return {
+      width: Number(el.videoWidth || 0),
+      height: Number(el.videoHeight || 0),
+    };
+  }
+  return { width: 0, height: 0 };
+}
+
+// Resolves a NodeList from the media selector
+// ('img[src], img[srcset], video[src], video[poster], video source[src]')
+// to canonical media elements: source children climb to their parent <video>,
+// duplicates are removed (a <video> reached via multiple source children
+// appears once), and non-media nodes are dropped.
+function resolveMediaSelectorResults(nodes) {
+  const result = new Set();
+  if (!nodes) return [];
+  for (const el of nodes) {
+    if (!el || el.nodeType !== 1) continue;
+    const tag = String(el.tagName || '').toUpperCase();
+    if (tag === 'IMG' || tag === 'VIDEO') {
+      result.add(el);
+    } else if (tag === 'SOURCE') {
+      const parent = el.closest?.('video');
+      if (parent) result.add(parent);
+    }
+  }
+  return Array.from(result);
+}
+
+const MEDIA_SELECTOR =
+  'img[src], img[srcset], video[src], video[poster], video source[src]';
+// === END PHASE_VIDEO_MEDIA_PARITY ===
+
 /** Mirrors extractMetadataForCoreItem getEffectiveImageRect for img nodes. */
 function getEffectiveImageRectForImageGate(img) {
   const r = img.getBoundingClientRect ? img.getBoundingClientRect() : null;
@@ -568,8 +629,9 @@ function getEffectiveImageRectForImageGate(img) {
   // uses Math.max(layout, natural) for the same lazy-load class of problem;
   // here we emit a plain rect object so callers receive a uniform rect shape
   // regardless of whether the layout was 0×0 (lazy-load) or already painted.
-  const nw = Number(img.naturalWidth || 0);
-  const nh = Number(img.naturalHeight || 0);
+  const intrinsic = getMediaIntrinsicSize(img);
+  const nw = intrinsic.width;
+  const nh = intrinsic.height;
   if (nw >= 10 && nh >= 10) {
     const pr = img.parentElement?.getBoundingClientRect?.() || null;
     const layoutLeft = Number(r?.left);
@@ -867,8 +929,7 @@ function isVisuallyHidden(el) {
       //    visibility:hidden, opacity<0.01) above this block still
       //    apply; this block only relaxes the self:zero-rect indicator.
       //  - Ancestor visibility checks below this block continue to run.
-      const tag = String(el.tagName || '').toUpperCase();
-      if (tag === 'IMG' && el.parentElement) {
+      if (isMediaElement(el) && el.parentElement) {
         const pr = el.parentElement.getBoundingClientRect?.();
         if (pr && pr.width > 0 && pr.height > 0) {
           // Parent has layout — fall through to ancestor checks.
@@ -1043,7 +1104,7 @@ function isOnlyAriaHiddenInVisibilityChain(el) {
       // <img> with zero self-rect but a parent that has layout space
       // is structurally present.
       const tag = String(el.tagName || '').toUpperCase();
-      if (tag !== 'IMG' || !el.parentElement) return false;
+      if (!isMediaElement(el) || !el.parentElement) return false;
       const pr = el.parentElement.getBoundingClientRect?.();
       if (!pr || pr.width <= 0 || pr.height <= 0) return false;
     }
@@ -1124,7 +1185,7 @@ function isInsideMapContainer(el) {
   // 1. <img> src domain check (catches Naver-style tile servers;
   //    no ARIA needed).
   try {
-    if (el.tagName === 'IMG') {
+    if (isMediaElement(el)) {
       const src = el.getAttribute?.('src') || '';
       if (isMapTileUrl(src)) return true;
     }
@@ -1176,25 +1237,166 @@ function isInsideMapContainer(el) {
  *     iterates inline, but Phase 27a expands its iteration to
  *     collect every dominant img rather than just the first)
  */
+// === PHASE_VIDEO_DOMINANT_LIFECYCLE ===
+// findDominantImagesInElement is the seed-image producer for Type B/D
+// candidates. Two video-specific behaviors are layered on top of the
+// existing Gate 1 & 2 (axial ratio + center-X) dominance test:
+//
+// 1. Hidden video guard: any <video> with zero layout rect (display:none,
+//    visibility:hidden, or unmounted) is skipped before any further
+//    processing. Without this, getEffectiveImageRectForImageGate would
+//    fall back to the parent rect, synthesizing a rect that lets the
+//    hidden video appear dominant — corrupting downstream hoverCompanions
+//    computation (the synthetic-rect seed matches different elements
+//    than the visible sibling <img> would).
+//
+// 2. Single-dominant selection: when multiple media elements (e.g.,
+//    overlapping <img> + <video>) all pass Gates 1 & 2, the result Set
+//    is filtered to at most one element. Selection uses
+//    document.elementFromPoint at each candidate's center to ask the
+//    browser "which element is visually on top here?" — accounting for
+//    z-index and stacking context without computing it manually.
+//    Falls back to largest rect area if no candidate is visibly on top.
+//
+// Both behaviors apply uniformly to Type B and Type D since both share
+// this seed producer.
 export function findDominantImagesInElement(container) {
   const out = new Set();
   try {
     if (!container || container.nodeType !== 1) return out;
     const rect = container.getBoundingClientRect?.();
     if (!rect || rect.width <= 0 || rect.height <= 0) return out;
-    const innerImgs = container.querySelectorAll?.('img[src], img[srcset]') || [];
+    const innerImgs = resolveMediaSelectorResults(
+      container.querySelectorAll?.(MEDIA_SELECTOR) || []
+    );
+
+    // Collect Gate 1 & 2 passing candidates.
+    const passing = [];
     for (const innerImg of innerImgs) {
+      // Hidden video guard (Fix 1): skip videos with zero layout rect.
+      // Image lazy-load fallback path is preserved (images may have
+      // zero layout rect but still be significant via natural size +
+      // parent rect — handled inside getEffectiveImageRectForImageGate).
+      if (String(innerImg.tagName || '').toUpperCase() === 'VIDEO') {
+        const layoutRect = innerImg.getBoundingClientRect?.();
+        if (!layoutRect || layoutRect.width <= 0 || layoutRect.height <= 0) {
+          continue;
+        }
+      }
       const innerRect = getEffectiveImageRectForImageGate(innerImg);
       if (!innerRect) continue;
       if (isImageDominantInCoreItem(innerRect, rect)) {
-        out.add(innerImg);
+        passing.push(innerImg);
       }
     }
+
+    if (passing.length === 0) return out;
+    if (passing.length === 1) {
+      out.add(passing[0]);
+      return out;
+    }
+
+    // === PHASE_IMG_PRIORITY_OVER_SAME_RECT_VIDEO ===
+    // When an IMG and a VIDEO share approximately the same rect (e.g., a
+    // static thumbnail <img> with an autoplay <video> overlay on hover),
+    // prefer IMG regardless of z-index. Rationale:
+    // - IMG src (or srcset highest-descriptor) is usually higher resolution
+    //   than viewport-bound video frame capture.
+    // - Hover-overlay videos are typically interaction effects rather than
+    //   the user's intended target; the static IMG is what's perceived as
+    //   "the content."
+    // Operates by removing VIDEOs that overlap with any IMG candidate
+    // (±5px on each rect coordinate to absorb subpixel rendering).
+    let filteredPassing = passing;
+    try {
+      const passingImgs = passing.filter((el) =>
+        String(el?.tagName || '').toUpperCase() === 'IMG'
+      );
+      const passingVideos = passing.filter((el) =>
+        String(el?.tagName || '').toUpperCase() === 'VIDEO'
+      );
+      if (passingImgs.length > 0 && passingVideos.length > 0) {
+        const TOLERANCE = 5;
+        const rectOf = (el) => {
+          try { return el.getBoundingClientRect?.() || null; } catch (_) { return null; }
+        };
+        const sameRect = (ra, rb) => {
+          if (!ra || !rb) return false;
+          return (
+            Math.abs(ra.left - rb.left) <= TOLERANCE &&
+            Math.abs(ra.top - rb.top) <= TOLERANCE &&
+            Math.abs(ra.width - rb.width) <= TOLERANCE &&
+            Math.abs(ra.height - rb.height) <= TOLERANCE
+          );
+        };
+        const imgRects = passingImgs.map(rectOf);
+        const removedVideos = new Set();
+        for (const video of passingVideos) {
+          const vr = rectOf(video);
+          if (!vr) continue;
+          for (const ir of imgRects) {
+            if (sameRect(vr, ir)) {
+              removedVideos.add(video);
+              break;
+            }
+          }
+        }
+        if (removedVideos.size > 0) {
+          filteredPassing = passing.filter((el) => !removedVideos.has(el));
+        }
+      }
+    } catch (_) { /* defensive — fall through with original passing */ }
+    // === END PHASE_IMG_PRIORITY_OVER_SAME_RECT_VIDEO ===
+
+    // Single-dominant selection (Fix 2): elementFromPoint at center,
+    // candidate-self-or-descendant means "visually on top here".
+    const topCandidates = [];
+    for (const cand of filteredPassing) {
+      try {
+        const cr = cand.getBoundingClientRect?.();
+        if (!cr || cr.width <= 0 || cr.height <= 0) continue;
+        const cx = (cr.left + cr.right) / 2;
+        const cy = (cr.top + cr.bottom) / 2;
+        // elementFromPoint may return null if the point is outside the
+        // viewport. In that case the candidate isn't visible to the user
+        // either — treat as not-on-top.
+        const topEl = document.elementFromPoint?.(cx, cy);
+        if (!topEl) continue;
+        if (topEl === cand || cand.contains?.(topEl)) {
+          topCandidates.push(cand);
+        }
+      } catch (e) {
+        // defensive: skip on any per-candidate failure
+      }
+    }
+
+    // Pick the one with the largest rect area:
+    //   - among topCandidates if non-empty (preferred — visually on top)
+    //   - among all passing candidates otherwise (occluded edge case)
+    const pool = topCandidates.length > 0 ? topCandidates : filteredPassing;
+    let winner = pool[0];
+    let winnerArea = 0;
+    try {
+      const wr = winner.getBoundingClientRect?.();
+      winnerArea = (Number(wr?.width) || 0) * (Number(wr?.height) || 0);
+    } catch (e) {}
+    for (let i = 1; i < pool.length; i++) {
+      try {
+        const cr = pool[i].getBoundingClientRect?.();
+        const area = (Number(cr?.width) || 0) * (Number(cr?.height) || 0);
+        if (area > winnerArea) {
+          winner = pool[i];
+          winnerArea = area;
+        }
+      } catch (e) {}
+    }
+    out.add(winner);
   } catch (e) {
     // defensive
   }
   return out;
 }
+// === END PHASE_VIDEO_DOMINANT_LIFECYCLE ===
 
 /**
  * Phase 21: shared significant-image pool for Type D and Type E.
@@ -1220,7 +1422,9 @@ function filterSignificantImages(root = document) {
   const cappedRootFontSize = Math.min(rootFontSizeRaw, 16);
   const minContentSize = Math.max(80, cappedRootFontSize * 2);
 
-  const allImgs = Array.from(root.querySelectorAll('img[src], img[srcset]') || []);
+  const allImgs = resolveMediaSelectorResults(
+    root.querySelectorAll(MEDIA_SELECTOR) || []
+  );
   for (const img of allImgs) {
     if (img.getAttribute?.('aria-hidden') === 'true') {
       const probeRect = img.getBoundingClientRect?.();
@@ -1228,7 +1432,8 @@ function filterSignificantImages(root = document) {
       if (!visuallyLarge) continue;
     }
 
-    const naturalW = Number(img.naturalWidth || 0);
+    const intrinsic = getMediaIntrinsicSize(img);
+    const naturalW = intrinsic.width;
     if (naturalW > 0 && naturalW < 20) continue;
 
     const rect = getEffectiveImageRectForImageGate(img);
@@ -1862,6 +2067,7 @@ function signatureOfNode(el) {
   // === END PHASE_MEANINGFUL_URL_SIGNATURE ===
   if (tag === 'A' && resolveAnchorUrl(el)) parts.push('href');
   if (tag === 'IMG' && el.hasAttribute?.('src')) parts.push('src');
+  if (tag === 'VIDEO' && (el.hasAttribute?.('src') || el.querySelector?.('source[src]'))) parts.push('src');
   return parts.join('|');
 }
 
@@ -2179,7 +2385,9 @@ async function detectTypeDItemMaps(root = document) {
     for (const { card } of inclusiveCards) {
       try {
         if (significantImageSet.has(card)) acceptedImageRefs.add(card);
-        const innerImgs = card.querySelectorAll?.('img[src], img[srcset]') || [];
+        const innerImgs = resolveMediaSelectorResults(
+          card.querySelectorAll?.(MEDIA_SELECTOR) || []
+        );
         for (const innerImg of innerImgs) {
           // Phase 22 marking: now that card conditions have passed, mark
           // these images to prevent reprocessing in subsequent loop iters.
@@ -2247,14 +2455,35 @@ async function detectTypeEItemMaps(rejectedImages = []) {
   const rejected = Array.isArray(rejectedImages) ? rejectedImages : [];
 
   for (const { img } of rejected) {
-    if (!img || String(img?.tagName || '').toUpperCase() !== 'IMG') continue;
+    if (!img || !isMediaElement(img)) continue;
     // === PHASE27D_HOVER_COMPANIONS (Type E) ===
+    // === PHASE_TYPE_E_HOVER_COMPANIONS_SCOPE ===
+    // Two-pass hoverCompanions computation:
+    //   1. sibling/ancestor mode (scope-less call) — original walk,
+    //      catches img's ancestors (3 levels), direct siblings of img,
+    //      and direct siblings of img's parent. Preserves Type E
+    //      coverage on sites like Pinterest/ArchDaily/Unsplash where
+    //      same-rect companions are direct ancestors or siblings.
+    //   2. scope-wide mode with img.parentElement as scope — walks the
+    //      entire parent subtree for same-rect descendants. Catches
+    //      Instagram's reel-player <div role="presentation"> overlay,
+    //      which is a descendant of a sibling of <video>, not a direct
+    //      sibling — missed by the sibling/ancestor walk.
+    // The scope-wide pass excludes scopeElement itself, so the parent
+    // wrapper is never erroneously added as a companion (parent already
+    // covered by the sibling/ancestor ancestor walk if its rect matches).
     let hoverCompanions = new Set();
     try {
-      hoverCompanions = findHoverCompanions(img);
+      const sibCompanions = findHoverCompanions(img);
+      for (const el of sibCompanions) hoverCompanions.add(el);
+      if (img.parentElement) {
+        const wideCompanions = findHoverCompanions(img, img.parentElement);
+        for (const el of wideCompanions) hoverCompanions.add(el);
+      }
     } catch (e) {
       hoverCompanions = new Set();
     }
+    // === END PHASE_TYPE_E_HOVER_COMPANIONS_SCOPE ===
     // === END PHASE27D_HOVER_COMPANIONS ===
     candidates.push({
       key: `typeE::${candidates.length}`,
@@ -2965,7 +3194,7 @@ function buildImageToItem(items) {
       if (!item) continue;
       if (item.evidenceType === EVIDENCE_TYPE_E) {
         const img = item.element;
-        if (img && String(img.tagName || '').toUpperCase() === 'IMG' && !map.has(img)) {
+        if (img && isMediaElement(img) && !map.has(img)) {
           map.set(img, item);
         }
         // === PHASE_TYPE_E_ANCHOR_REGISTER ===
