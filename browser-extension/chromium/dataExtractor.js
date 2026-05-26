@@ -1385,6 +1385,160 @@ export function extractVideoMediaInfo(video) {
 }
 // === END PHASE_VIDEO_CLIP ===
 
+// === PHASE_PLATFORM_ORIGINAL_URL_HELPER ===
+// Shared image URL resolution for clip-time use.
+//
+// Centralizes platform-specific original-URL extraction (Google /imgres,
+// Naver pstatic proxy) and a generic srcset parser that picks the highest
+// descriptor URL (works for Pinterest 4x density descriptors, Dribbble
+// 320w-1200w width descriptors, Instagram retina @2x, etc.). Falls back
+// to Pinterest path transform (/236x/ → /originals/) for pins without
+// srcset, then to dominantImg.src/currentSrc/src.
+//
+// Resolution order:
+//   1. Google /imgres anchor's imgurl query parameter (host-gated)
+//   2. Naver pstatic proxy ?src= query parameter (host-gated)
+//   3. Generic srcset parser: highest descriptor URL (host-independent)
+//   4. Pinterest /236x/ → /originals/ path transform (host-gated, fallback)
+//   5. dominantImg.src / currentSrc / src
+//
+// Inputs:
+//   - coreItem: card element (Type B/D) or media element itself (Type E)
+//   - dominantImg: dominant <img> element; for Type E IMG shortcut, the
+//     same element as coreItem
+//
+// Returns: absolute image URL string (or empty string if all paths fail).
+// Width/height are NOT returned — callers compute from element rect.
+export function resolveClipImageUrl(coreItem, dominantImg) {
+  try {
+    const hostname = String(window?.location?.hostname || '').toLowerCase().trim();
+
+    // 1. Google Images: /imgres anchor (anchor-based, not srcset)
+    const isGoogleHost = /^([\w-]+\.)*google\.[\w.]+$/i.test(hostname);
+    if (isGoogleHost && coreItem && typeof coreItem.querySelector === 'function') {
+      try {
+        const imgresAnchor = coreItem.querySelector('a[href*="/imgres"]');
+        if (imgresAnchor) {
+          const href = String(imgresAnchor.getAttribute('href') || '').trim();
+          if (href) {
+            const u = new URL(href, window.location.origin);
+            const imgurl = u.searchParams.get('imgurl');
+            if (imgurl && /^https?:\/\//i.test(imgurl)) {
+              return imgurl;
+            }
+          }
+        }
+      } catch (_) { /* fall through */ }
+    }
+
+    // 2. Naver image search: pstatic proxy ?src= (proxy-based, not srcset)
+    const isNaverImageSearch = (
+      /(?:^|\.)search\.naver\.com$/.test(hostname) &&
+      String(window?.location?.pathname || '') === '/search.naver' &&
+      new URLSearchParams(String(window?.location?.search || '')).get('where') === 'image'
+    );
+    if (isNaverImageSearch && coreItem && typeof coreItem.querySelector === 'function') {
+      try {
+        const naverImg = coreItem.querySelector('img[src*="search.pstatic.net"]');
+        if (naverImg) {
+          const proxySrc = String(
+            naverImg.getAttribute('src') || naverImg.currentSrc || naverImg.src || ''
+          ).trim();
+          if (proxySrc) {
+            const proxyUrl = new URL(proxySrc);
+            const originalUrl = proxyUrl.searchParams.get('src');
+            if (originalUrl && /^https?:\/\//i.test(originalUrl)) {
+              return originalUrl;
+            }
+          }
+        }
+      } catch (_) { /* fall through */ }
+    }
+
+    // 3. Generic srcset parser: highest descriptor URL (host-independent)
+    if (dominantImg) {
+      const srcset = String(dominantImg.getAttribute?.('srcset') || '').trim();
+      if (srcset) {
+        const maxUrl = parseSrcsetMaxDescriptor(srcset);
+        if (maxUrl) {
+          const absolute = resolveAbsoluteImageUrl(maxUrl);
+          if (absolute && /^https?:\/\//i.test(absolute)) {
+            return absolute;
+          }
+        }
+      }
+    }
+
+    // 4. Pinterest path transform: /236x/ → /originals/ (fallback for pins without srcset)
+    const isPinterestHost = /^([\w-]+\.)*pinterest\.[\w.]+$/i.test(hostname);
+    if (isPinterestHost && dominantImg) {
+      try {
+        const rawSrc = String(
+          dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src || ''
+        ).trim();
+        if (rawSrc && /pinimg\.com\/\d+x\//i.test(rawSrc)) {
+          const transformed = rawSrc.replace(
+            /^(https?:\/\/[^/]*pinimg\.com\/)\d+x\//i,
+            '$1originals/'
+          );
+          const absolute = resolveAbsoluteImageUrl(transformed);
+          if (absolute && /^https?:\/\//i.test(absolute)) {
+            return absolute;
+          }
+        }
+      } catch (_) { /* fall through */ }
+    }
+
+    // 5. Final fallback: dominantImg.src / currentSrc / src
+    if (dominantImg) {
+      return resolveAbsoluteImageUrl(
+        dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src || ''
+      );
+    }
+    return '';
+  } catch (_) {
+    return '';
+  }
+}
+
+// File-internal: parse srcset descriptors and return URL with highest
+// descriptor value. Handles both density (`Nx`) and width (`Nw`) units.
+// Uses the first unit seen; ignores candidates with a different unit
+// (HTML spec mandates single-unit srcsets, so mixed-unit input is rare).
+// Returns empty string on no valid candidate.
+function parseSrcsetMaxDescriptor(srcset) {
+  try {
+    const candidates = String(srcset || '').split(',').map((s) => s.trim()).filter(Boolean);
+    let bestUrl = '';
+    let bestValue = -1;
+    let bestUnit = null;  // 'x' or 'w'
+    for (const candidate of candidates) {
+      const parts = candidate.split(/\s+/);
+      if (parts.length === 0) continue;
+      const url = parts[0];
+      if (!url) continue;
+      const descriptor = parts[1] || '1x';  // bare URL means 1x default
+      const match = descriptor.match(/^([\d.]+)([xw])$/);
+      if (!match) continue;
+      const value = parseFloat(match[1]);
+      if (isNaN(value) || value < 0) continue;
+      const unit = match[2];
+      if (bestUnit === null) {
+        bestUnit = unit;
+        bestUrl = url;
+        bestValue = value;
+      } else if (unit === bestUnit && value > bestValue) {
+        bestUrl = url;
+        bestValue = value;
+      }
+      // mixed-unit candidates: ignore (keep current bestUnit's max)
+    }
+    return bestUrl;
+  } catch (_) {
+    return '';
+  }
+}
+// === END PHASE_PLATFORM_ORIGINAL_URL_HELPER ===
 
 export function extractImageFromCoreItem(coreItem) {
   try {
@@ -1403,9 +1557,7 @@ export function extractImageFromCoreItem(coreItem) {
     //      getEffectiveImageRectForImageGate in itemDetector.js.
     if (String(coreItem.tagName || '').toUpperCase() === 'IMG') {
       // === PHASE_IMAGE_URL_PIPELINE ===
-      const src = resolveAbsoluteImageUrl(
-        coreItem.getAttribute?.('src') || coreItem.currentSrc || coreItem.src
-      );
+      const src = resolveClipImageUrl(coreItem, coreItem);
       // === END PHASE_IMAGE_URL_PIPELINE ===
       if (src) {
         const rect = coreItem.getBoundingClientRect?.();
@@ -3529,9 +3681,7 @@ export function extractMetadataForCoreItem(coreItem, closestAtag = null, hovered
           }
         } else {
           const r = dominantImg.getBoundingClientRect?.();
-          const src = resolveAbsoluteImageUrl(
-            dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src
-          );
+          const src = resolveClipImageUrl(coreItem, dominantImg);
           if (src && r && r.width > 0 && r.height > 0) {
             image = {
               url: src,

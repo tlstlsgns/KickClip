@@ -34,6 +34,7 @@ import {
   getYouTubeThumbnailUrl,
   resolveAbsoluteImageUrl,
   extractVideoMediaInfo,
+  resolveClipImageUrl,
 } from './dataExtractor.js';
 import {
   getKCShadowRoot,
@@ -1827,9 +1828,7 @@ async function saveActiveCoreItem(request = {}) {
               }
             } else {
               const r = dominantImg.getBoundingClientRect?.();
-              const src = resolveAbsoluteImageUrl(
-                dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src
-              );
+              const src = resolveClipImageUrl(activeCoreEl, dominantImg);
               if (src && r && r.width > 0 && r.height > 0) {
                 freshImage = {
                   url: src,
