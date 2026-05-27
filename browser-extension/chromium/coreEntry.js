@@ -1316,9 +1316,34 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         }
       }
     }
+    // === PHASE_OVERLAY_ANCHOR_REBIND ===
+    // Fallback when the seed loop did not pick a dominantImg — either
+    // because `target.closest('a')` returned null (no <a> ancestor on
+    // the hover target) or returned a truthy but WRONG anchor that
+    // does not contain any seedImage (e.g. the hover target was over
+    // the card's title or channel link, or a sibling touch-feedback
+    // overlay layer, rather than the thumbnail anchor).
+    //
+    // Original behavior assigned dominantImg from the first seed but
+    // only rebound `anchor` when `!anchor`. When the target produced a
+    // wrong-but-truthy anchor, that anchor leaked into
+    // determineTypeDOverlayElement, forcing it into Branch B even
+    // though a valid image-wrapping anchor exists for the dominantImg.
+    //
+    // Corrected behavior: also rebind `anchor` when the existing one
+    // does NOT contain the dominantImg. A valid target-derived anchor
+    // (one that already wraps the dominantImg — the common hover-on-
+    // thumbnail case) is preserved.
+    //
+    // Mirrors the discipline of refreshCoreItemMetadata's overlay
+    // re-eval path, which binds `newAnchor = newDominantImg.closest('a')`
+    // unconditionally (it has no `target` context to preserve).
     if (!dominantImg && seeds && seeds.size > 0) {
       dominantImg = seeds.values().next().value || null;
-      if (!anchor && dominantImg) {
+      if (
+        dominantImg &&
+        (!anchor || !anchor.contains?.(dominantImg))
+      ) {
         try {
           anchor = dominantImg.closest?.('a') || null;
         } catch (e) {
@@ -1326,6 +1351,7 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         }
       }
     }
+    // === END PHASE_OVERLAY_ANCHOR_REBIND ===
     overlayElement = determineTypeDOverlayElement(coreItem, dominantImg, anchor);
   }
   // === PHASE_OVERLAY_HOVER_GATE ===
