@@ -3567,42 +3567,6 @@ function schedulePreScanScrollDebounced() {
       // === END PHASE_OVERLAY_HOVER_GATE ===
       return;
     }
-    // === PHASE_OVERLAY_RECT_REENTRY ===
-    // Sibling-overlay rescue: some sites (notably YouTube) inject hover
-    // preview elements as SIBLINGS of the active card rather than
-    // descendants — e.g., YouTube's <div #video-preview> lives outside
-    // <ytd-rich-item-renderer> in <div #content>. When the user moves
-    // the cursor back over the thumbnail through such a sibling overlay,
-    // event.target lives outside active.contains(...) and the DOM
-    // ancestor check above misses. Detect the re-entry by rect instead:
-    // if the cursor's (clientX, clientY) is inside the active overlay
-    // element's bounding rect, re-show the overlay just as the DOM
-    // branch would. Applies to Type D only (overlayEl !== active);
-    // Type B / Type E have overlayEl === active and are handled by the
-    // DOM contains block above (which always succeeds for in-card moves).
-    if (active && state.activeOverlayElement && state.activeOverlayElement !== active) {
-      const overlayEl = state.activeOverlayElement;
-      const overlayRect = overlayEl.getBoundingClientRect?.();
-      if (
-        overlayRect && overlayRect.width > 0 && overlayRect.height > 0 &&
-        Number.isFinite(e.clientX) && Number.isFinite(e.clientY) &&
-        e.clientX >= overlayRect.left && e.clientX <= overlayRect.right &&
-        e.clientY >= overlayRect.top && e.clientY <= overlayRect.bottom
-      ) {
-        showCoreHighlight(active, false, overlayRect);
-        return;
-      }
-    }
-    // === END PHASE_OVERLAY_RECT_REENTRY ===
-    // YouTube #video-preview hover preview is a transient overlay that the
-    // dispatcher should ignore — it appears and disappears too fast for
-    // our purposes. Placed AFTER the active.contains block so re-entries
-    // into the preview (which lives inside the active card's
-    // <ytd-thumbnail>) still trigger PHASE_OVERLAY_LIFECYCLE_DECOUPLING
-    // re-show. Only reach here when the pointer is OUTSIDE the active
-    // coreItem (or no coreItem is active) — in which case the transient
-    // preview shouldn't initiate fresh activation.
-    if (target && target.closest?.('#video-preview, ytd-miniplayer')) return;
     // === PHASE27D_RELAXED_DISPATCH ===
     // Hovering off any candidate clears the active CoreItem rather than
     // letting it linger. The previous behavior left the highlight on
