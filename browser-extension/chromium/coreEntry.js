@@ -91,7 +91,6 @@ let _coreItemMutationObserver = null;
 let _coreItemMetadataDebounceTimer = null;
 let _observedCoreItemElement = null;
 // === END PHASE_COREITEM_LIVE_METADATA ===
-const instagramFetchInFlightByElement = new WeakMap();
 
 const IS_IFRAME = window.self !== window.top;
 let _windowFocused = true; // false while the browser window is not focused
@@ -453,140 +452,6 @@ function withFacebookTimestampActiveHoverUrl(meta = {}, coreItem = null, cachedE
   }
   if ('shortcode' in nextMeta) delete nextMeta.shortcode;
   return nextMeta;
-}
-
-function applyInstagramFallbackMetadata(meta = {}) {
-  const baseTitle = String(meta?.title || '').trim();
-  const fallbackTitle = baseTitle || String(document?.title || '').trim() || String(meta?.activeHoverUrl || '').trim() || '(No title)';
-  const imageUrl = String(meta?.image?.url || meta?.thumbnail || '').trim();
-  return {
-    ...meta,
-    title: fallbackTitle,
-    ...(imageUrl ? { thumbnail: imageUrl, image: { ...(meta?.image || {}), url: imageUrl } } : {}),
-  };
-}
-
-function requestInstagramPostDataForTypeB(coreItem, meta, clientX = null, clientY = null) {
-  if (!coreItem || coreItem.nodeType !== 1) return;
-  if (!chrome?.runtime?.sendMessage) return;
-  const platform = String(meta?.platform || '').toUpperCase();
-  const shortcode = String(meta?.shortcode || '').trim();
-  if (platform !== 'INSTAGRAM' || !shortcode) return;
-
-  const alreadyRequestedFor = instagramFetchInFlightByElement.get(coreItem);
-  if (alreadyRequestedFor === shortcode) return;
-  instagramFetchInFlightByElement.set(coreItem, shortcode);
-
-  chrome.runtime.sendMessage(
-    { action: 'get-instagram-post-data', shortcode },
-    (result) => {
-      instagramFetchInFlightByElement.delete(coreItem);
-      const activeMeta = state.lastExtractedMetadata || {};
-      const stillSameCoreItem = state.activeCoreItem === coreItem;
-      const stillSameTarget =
-        stillSameCoreItem &&
-        String(activeMeta?.platform || '').toUpperCase() === 'INSTAGRAM' &&
-        String(activeMeta?.shortcode || '').trim() === shortcode;
-
-      if (!stillSameTarget) return;
-
-      if (chrome?.runtime?.lastError) {
-        state.lastExtractedMetadata = applyInstagramFallbackMetadata(activeMeta);
-        // showMetadataTooltip disabled — CoreItem hover uses status badge only
-        return;
-      }
-
-      const caption = String(result?.caption || '').trim();
-      const thumbnailUrl = String(result?.thumbnailUrl || '').trim();
-      const postUrl = String(result?.postUrl || '').trim();
-      const hasUpdates = Boolean(caption || thumbnailUrl);
-      if (!result?.success || !hasUpdates) {
-        let fallbackMeta = applyInstagramFallbackMetadata(activeMeta);
-        if (postUrl && !String(fallbackMeta?.activeHoverUrl || '').trim()) {
-          fallbackMeta = { ...fallbackMeta, activeHoverUrl: postUrl };
-        }
-        state.lastExtractedMetadata = fallbackMeta;
-        state.activeHoverUrl = String(state.lastExtractedMetadata?.activeHoverUrl || '').trim() || state.activeHoverUrl;
-        // showMetadataTooltip disabled — CoreItem hover uses status badge only
-        return;
-      }
-
-      // DOM extraction priority: only set background-fetched image
-      // when DOM extraction produced no image URL. This keeps the
-      // user-visible Instagram slide image (when present) instead
-      // of overwriting it with the /media/?size=l cover redirect.
-      const hasExistingImage = !!(
-        activeMeta?.image?.url &&
-        String(activeMeta.image.url).trim()
-      );
-      const mergedMeta = {
-        ...activeMeta,
-        ...(caption ? { title: caption } : {}),
-        ...(thumbnailUrl && !hasExistingImage
-          ? {
-              thumbnail: thumbnailUrl,
-              image: { ...(activeMeta?.image || {}), url: thumbnailUrl },
-            }
-          : {}),
-        ...(postUrl ? { activeHoverUrl: postUrl } : {}),
-      };
-      state.lastExtractedMetadata = mergedMeta;
-      state.activeHoverUrl = String(mergedMeta?.activeHoverUrl || '').trim() || state.activeHoverUrl;
-      // showMetadataTooltip disabled — CoreItem hover uses status badge only
-    }
-  );
-}
-
-/**
- * For Type A CoreItems whose activeHoverUrl is an Instagram post URL,
- * fetches the thumbnail via background.js and updates the tooltip image.
- */
-function requestInstagramThumbnail(coreItem, meta, clientX = null, clientY = null) {
-  try {
-    const activeHoverUrl = String(meta?.activeHoverUrl || '').trim();
-    // Only process Instagram post URLs
-    const instagramPostMatch = activeHoverUrl.match(
-      /^https?:\/\/(?:www\.)?instagram\.com\/p\/([^/?#]+)\/?/i
-    );
-    if (!instagramPostMatch) return;
-    // Skip if image already present
-    if (meta?.image?.url) return;
-
-    const shortcode = instagramPostMatch[1];
-    if (!shortcode) return;
-
-    // Deduplicate: skip if already in flight for this element + shortcode
-    const alreadyRequestedFor = instagramFetchInFlightByElement.get(coreItem);
-    if (alreadyRequestedFor === shortcode) return;
-    instagramFetchInFlightByElement.set(coreItem, shortcode);
-
-    chrome.runtime.sendMessage(
-      { action: 'get-instagram-post-data', shortcode },
-      (result) => {
-        instagramFetchInFlightByElement.delete(coreItem);
-        if (chrome.runtime.lastError || !result?.success) return;
-
-        const thumbnailUrl = String(result?.thumbnailUrl || '').trim();
-        if (!thumbnailUrl) return;
-
-        // Verify the CoreItem is still the active one
-        const activeMeta = state.lastExtractedMetadata;
-        const stillActive =
-          state.activeCoreItem === coreItem &&
-          String(activeMeta?.activeHoverUrl || '').trim() === activeHoverUrl;
-        if (!stillActive) return;
-
-        // Update metadata with fetched thumbnail
-        state.lastExtractedMetadata = {
-          ...activeMeta,
-          image: { ...(activeMeta?.image || {}), url: thumbnailUrl },
-        };
-        state.activeHoverUrl = String(activeMeta?.activeHoverUrl || '').trim() || state.activeHoverUrl;
-
-        // showMetadataTooltip disabled — CoreItem hover uses status badge only
-      }
-    );
-  } catch (e) {}
 }
 
 // === PHASE_COREITEM_LIVE_METADATA ===
@@ -1563,9 +1428,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     if (state.activeOverlayElement !== null) {
       showCoreStatusBadge('default');
     }
-    if (evidenceType === 'B') {
-      requestInstagramPostDataForTypeB(coreItem, state.lastExtractedMetadata, null, null);
-    }
     // === PHASE_IFRAME_HOVER_PROPAGATION ===
     // Broadcast hover info to top frame so top-frame keydown can clip
     // iframe-internal images even when iframe Permissions Policy blocks
@@ -1594,12 +1456,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   // === END PHASE_COREITEM_LIVE_METADATA ===
   if (state.activeOverlayElement !== null) {
     showCoreStatusBadge('default');
-  }
-  if (evidenceType === 'B') {
-    requestInstagramPostDataForTypeB(coreItem, state.lastExtractedMetadata, clientX, clientY);
-  }
-  if (evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR) {
-    requestInstagramThumbnail(coreItem, state.lastExtractedMetadata, clientX, clientY);
   }
   return true;
   // === END PHASE27B_HOVER_DISPATCH ===
@@ -2323,7 +2179,7 @@ async function saveActiveCoreItem(request = {}) {
     }
     // === PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
     // Resolution priority:
-    //   1. Video frame data URL from clipboard pipeline — when present,
+    //   1. Video frame data URL from clipboard pipeline (new) — when present,
     //      this is the canvas frame captured at clip-time keystroke,
     //      matching the clipboard PNG and img_thumbnail_b64 exactly.
     //   2. Existing fallback: request.img_url, freshImage.url, or ''.
