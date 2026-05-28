@@ -30,8 +30,6 @@ import {
   resolveAnchorUrl,
 } from './coreEngine.js';
 import {
-  extractYouTubeShortcodeFromUrl,
-  getYouTubeThumbnailUrl,
   resolveAbsoluteImageUrl,
   extractVideoMediaInfo,
   resolveClipImageUrl,
@@ -2155,14 +2153,9 @@ async function saveActiveCoreItem(request = {}) {
     const isIframeRelay = meta?._isIframeRelay === true;
     const url = String(meta?.activeHoverUrl || activeUrl).trim();
     if (!url) return { success: false, reason: 'missing-url' };
-    const youtubeShortcode = extractYouTubeShortcodeFromUrl(url);
-    const youtubeThumbnailUrl = youtubeShortcode ? getYouTubeThumbnailUrl(youtubeShortcode) : '';
-    const isYouTubeSave = !!youtubeThumbnailUrl;
 
     const title = String(meta?.title || document.title || url).trim();
-    let imgUrl = isYouTubeSave
-      ? youtubeThumbnailUrl
-      : String(request?.img_url || freshImage?.url || '').trim();
+    let imgUrl = String(request?.img_url || freshImage?.url || '').trim();
 
     // Step 1: hide CoreHighlight + StatusBadge for screenshot.
     // Skipped in relay mode — iframe owns the visible UI.
@@ -2330,14 +2323,11 @@ async function saveActiveCoreItem(request = {}) {
     }
     // === PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL ===
     // Resolution priority:
-    //   1. YouTube special path (existing) — youtubeThumbnailUrl
-    //   2. Video frame data URL from clipboard pipeline (new) — when present,
+    //   1. Video frame data URL from clipboard pipeline — when present,
     //      this is the canvas frame captured at clip-time keystroke,
     //      matching the clipboard PNG and img_thumbnail_b64 exactly.
-    //   3. Existing fallback: request.img_url, freshImage.url, or ''.
-    if (isYouTubeSave) {
-      imgUrl = youtubeThumbnailUrl;
-    } else if (videoFrameDataUrl) {
+    //   2. Existing fallback: request.img_url, freshImage.url, or ''.
+    if (videoFrameDataUrl) {
       imgUrl = videoFrameDataUrl;
     } else {
       imgUrl = String(request?.img_url || freshImage?.url || '').trim();
@@ -2364,9 +2354,8 @@ async function saveActiveCoreItem(request = {}) {
             // resolved URL (blob:, https:, etc.); ignores <source> children
             originSource = String(dominantEl.src || '').trim();
           } else {
-            // IMG dominant — origin_source mirrors img_url (already a
-            // resolved high-res URL via resolveClipImageUrl, or YouTube
-            // thumbnail URL for YouTube saves)
+            // IMG dominant — origin_source mirrors img_url (a resolved
+            // high-res URL via resolveClipImageUrl)
             originSource = String(imgUrl || '').trim();
             // If imgUrl is a data URL (rare for image case but defensive),
             // skip — data URLs are not stable dedup keys.
