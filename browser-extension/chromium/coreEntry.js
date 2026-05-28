@@ -952,10 +952,105 @@ function unmountActiveCoreItemMutationObserver() {
 }
 // === END PHASE_COREITEM_LIVE_METADATA ===
 
+// === PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
+// Active overlay rect watcher.
+//
+// Problem: the overlay rect is computed once at activation. When the
+// active overlay ELEMENT resizes in place (same DOM node, new size),
+// nothing recomputes the rect. The canonical case: YouTube reuses one
+// #video-preview <video> element across cards of different aspect
+// ratios (landscape vs shorts), so moving between cards keeps the same
+// element but changes its width/height — and the overlay stays at the
+// previous size. The DOM-driven re-dispatch layer
+// (PHASE_DOM_DRIVEN_REDISPATCH) explicitly skips this because its guard
+// returns early when the hit element equals state.activeCoreItem.
+//
+// This is element-agnostic: it observes whatever element currently
+// drives the overlay (state.activeOverlayElement — which may be the
+// coreItem itself for Type B / Type E, or a distinct overlay element
+// for Type D). On a size change it recomputes the rect and refreshes
+// the overlay directly via showCoreHighlight with a rectOverride — a
+// rect-only refresh, NOT a full re-dispatch.
+//
+// Scope boundary: ResizeObserver fires on SIZE changes only.
+// Position-only changes (same size, moved) are handled by the scroll
+// path and mouseover re-dispatch, not here. This matches the reported
+// symptom (aspect-ratio/size mismatch) and keeps the watcher cheap.
+//
+// Lifecycle mirrors mountActiveCoreItemMutationObserver: attach on
+// activation (after the overlay is shown), detach in coreClear.
+let _activeOverlayResizeObserver = null;
+let _observedOverlayElement = null;
+let _overlayRectWatchDebounceTimer = null;
+const KC_OVERLAY_RECT_WATCH_DEBOUNCE_MS = 50;
+
+function mountActiveOverlayRectWatcher(overlayElement) {
+  unmountActiveOverlayRectWatcher();
+
+  if (!overlayElement || typeof ResizeObserver === 'undefined') return;
+  // Only observe real elements (not the degenerate {} placeholder
+  // sometimes assigned to state.activeCoreItem during transitions).
+  if (overlayElement.nodeType !== 1) return;
+
+  const cb = () => {
+    if (_overlayRectWatchDebounceTimer) {
+      clearTimeout(_overlayRectWatchDebounceTimer);
+    }
+    _overlayRectWatchDebounceTimer = setTimeout(() => {
+      _overlayRectWatchDebounceTimer = null;
+      try {
+        // Only refresh if this element is still the active overlay and
+        // an active core item still exists. Avoids racing a coreClear.
+        if (_observedOverlayElement !== state.activeOverlayElement) return;
+        const active = state.activeCoreItem;
+        if (!active || (typeof active === 'object' && active.nodeType !== 1)) return;
+
+        const el = _observedOverlayElement;
+        if (!el || el.nodeType !== 1) return;
+        const rect = el.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+        // Rect-only refresh: treat as a scroll-style update (isScrollUpdate
+        // semantics) by passing the fresh rect as rectOverride.
+        showCoreHighlight(active, false, rect);
+      } catch (_) {
+        // Defensive: never let the watcher throw.
+      }
+    }, KC_OVERLAY_RECT_WATCH_DEBOUNCE_MS);
+  };
+
+  try {
+    const observer = new ResizeObserver(cb);
+    observer.observe(overlayElement);
+    _activeOverlayResizeObserver = observer;
+    _observedOverlayElement = overlayElement;
+  } catch (_) {
+    // Defensive: ResizeObserver.observe can throw on detached nodes.
+    _activeOverlayResizeObserver = null;
+    _observedOverlayElement = null;
+  }
+}
+
+function unmountActiveOverlayRectWatcher() {
+  if (_overlayRectWatchDebounceTimer) {
+    try { clearTimeout(_overlayRectWatchDebounceTimer); } catch (_) {}
+    _overlayRectWatchDebounceTimer = null;
+  }
+  if (_activeOverlayResizeObserver) {
+    try { _activeOverlayResizeObserver.disconnect(); } catch (_) {}
+    _activeOverlayResizeObserver = null;
+  }
+  _observedOverlayElement = null;
+}
+// === END PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
+
 function coreClear() {
   // === PHASE_OVERLAY_ON_IMAGE ===
   state.activeOverlayElement = null;
   // === END PHASE_OVERLAY_ON_IMAGE ===
+  // === PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
+  unmountActiveOverlayRectWatcher();
+  // === END PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
   if (IS_IFRAME) {
     // === PHASE_COREITEM_LIVE_METADATA ===
     unmountActiveCoreItemMutationObserver();
@@ -1366,11 +1461,17 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   state.activeOverlayElement = overlayElement;
   if (overlayElement === null) {
     hideCoreHighlight();
+    // === PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
+    unmountActiveOverlayRectWatcher();
+    // === END PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
   } else if (
     overlayElement !== coreItem &&
     !isPointerInsideOverlay(overlayElement, clientX, clientY, target)
   ) {
     hideCoreHighlight();
+    // === PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
+    unmountActiveOverlayRectWatcher();
+    // === END PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
   } else {
     const overlayRect = overlayElement === coreItem
       ? null
@@ -1380,6 +1481,12 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     } else {
       showCoreHighlight(coreItem, false);
     }
+    // === PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
+    // Watch the shown overlay element for in-place size changes.
+    // overlayElement may be coreItem (Type B / Type E) or a distinct
+    // Type D overlay element — the watcher is element-agnostic.
+    mountActiveOverlayRectWatcher(overlayElement);
+    // === END PHASE_ACTIVE_OVERLAY_RECT_WATCH ===
   }
   // === END PHASE_OVERLAY_ON_IMAGE ===
   // === PHASE_HOVER_IMAGE_PREFETCH ===
