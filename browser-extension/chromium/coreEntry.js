@@ -387,21 +387,6 @@ function withInstagramActiveHoverUrl(meta = {}, coreItem = null, cachedExtractio
   return { ...meta, shortcode, activeHoverUrl: assignedUrl };
 }
 
-function withLinkedInCanonicalActiveHoverUrl(meta = {}, coreItem = null, cachedExtraction = null) {
-  const platform = String(meta?.platform || '').toUpperCase();
-  if (platform !== 'LINKEDIN') return meta;
-  const extracted =
-    cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platform);
-  const shortcode = String(meta?.shortcode || '').trim() || extracted.shortcode;
-  if (!/^\d{19}$/.test(shortcode)) return { ...meta, shortcode: null };
-  const currentUrl = String(meta?.activeHoverUrl || '').trim();
-  const assignedUrl =
-    extracted.activeHoverUrl ||
-    currentUrl ||
-    `https://www.linkedin.com/feed/update/urn:li:activity:${shortcode}`;
-  return { ...meta, shortcode, activeHoverUrl: assignedUrl };
-}
-
 function withThreadsActiveHoverUrl(meta = {}, coreItem = null, cachedExtraction = null) {
   const platform = String(meta?.platform || '').toUpperCase();
   if (platform !== 'THREADS') return meta;
@@ -516,13 +501,6 @@ function refreshCoreItemMetadata(coreItem) {
         coreItem,
         cachedExtraction
       );
-    } else if (evidenceType === 'B' && platformForB === 'LINKEDIN') {
-      const li = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-      meta = withLinkedInCanonicalActiveHoverUrl(
-        { ...meta, platform: platformForB, ...(li.shortcode ? { shortcode: li.shortcode } : {}), ...(li.activeHoverUrl ? { activeHoverUrl: li.activeHoverUrl } : {}) },
-        coreItem,
-        cachedExtraction
-      );
     } else if (evidenceType === 'B' && platformForB === 'THREADS') {
       const th = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
       meta = withThreadsActiveHoverUrl(
@@ -592,7 +570,6 @@ function refreshCoreItemMetadata(coreItem) {
       } else {
         syncedMeta = withInstagramActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
       }
-      syncedMeta = withLinkedInCanonicalActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
       syncedMeta = withThreadsActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
       syncedMeta = withFacebookTimestampActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
     }
@@ -1033,12 +1010,7 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   const coreItem = itemEntry.element;
   const closestAtag = null;
 
-  // Type B LinkedIn block (preserved from prior implementation).
   const platformForB = evidenceType === 'B' ? getCurrentPlatform() : '';
-  if (evidenceType === 'B' && platformForB === 'LINKEDIN') {
-    if (state.activeCoreItem) coreClear();
-    return false;
-  }
 
   // Type B cache hookup (preserved).
   const typeBEntry = evidenceType === 'B' ? getItemMapEntryByElement(coreItem) : null;
@@ -1089,13 +1061,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
   } else if (evidenceType === 'B' && platformForB === 'INSTAGRAM') {
     meta = withInstagramActiveHoverUrl(
       { ...meta, platform: platformForB, ...(shortcodeForB ? { shortcode: shortcodeForB } : {}) },
-      coreItem,
-      cachedExtraction
-    );
-  } else if (evidenceType === 'B' && platformForB === 'LINKEDIN') {
-    const li = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-    meta = withLinkedInCanonicalActiveHoverUrl(
-      { ...meta, platform: platformForB, ...(li.shortcode ? { shortcode: li.shortcode } : {}), ...(li.activeHoverUrl ? { activeHoverUrl: li.activeHoverUrl } : {}) },
       coreItem,
       cachedExtraction
     );
@@ -1208,7 +1173,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     } else {
       syncedMeta = withInstagramActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
     }
-    syncedMeta = withLinkedInCanonicalActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
     syncedMeta = withThreadsActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
     syncedMeta = withFacebookTimestampActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
   }

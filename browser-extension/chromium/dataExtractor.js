@@ -1157,81 +1157,6 @@ export function extractTitleFromCoreItem(coreItem, activeHoverUrl = null) {
   }
 }
 
-function extractLinkedInCommentaryFromCoreItem(coreItem) {
-  try {
-    if (!coreItem || coreItem.nodeType !== 1) {
-      return { status: 'not_found', extracted_text: '', text_length: 0 };
-    }
-
-    const feedRoot =
-      (coreItem.matches?.('div[data-view-name="feed-full-update"]') ? coreItem : null) ||
-      coreItem.closest?.('div[data-view-name="feed-full-update"]') ||
-      coreItem.querySelector?.('div[data-view-name="feed-full-update"]') ||
-      coreItem;
-
-    const commentaryContainer =
-      feedRoot.querySelector?.('p[data-view-name="feed-commentary"], div[data-view-name="feed-commentary"]') || null;
-    if (!commentaryContainer) {
-      return { status: 'not_found', extracted_text: '', text_length: 0 };
-    }
-
-    const targetTextBox =
-      commentaryContainer.querySelector?.('span[data-testid="expandable-text-box"]') ||
-      commentaryContainer.querySelector?.('[data-testid="expandable-text-box"]') ||
-      commentaryContainer;
-    if (!targetTextBox) {
-      return { status: 'not_found', extracted_text: '', text_length: 0 };
-    }
-
-    const clone = targetTextBox.cloneNode(true);
-    if (!clone || clone.nodeType !== 1) {
-      return { status: 'not_found', extracted_text: '', text_length: 0 };
-    }
-
-    // Remove UI controls around expansion/translation before text extraction.
-    const controlSelectors = [
-      'button',
-      '[role="button"]',
-      'a[role="button"]',
-      '[data-control-name*="expand"]',
-      '[data-control-name*="translation"]',
-      '[aria-label*="See more"]',
-      '[aria-label*="See translation"]',
-      '[aria-label*="더 보기"]',
-      '[aria-label*="번역"]',
-    ];
-    for (const sel of controlSelectors) {
-      const nodes = Array.from(clone.querySelectorAll?.(sel) || []);
-      for (const n of nodes) {
-        try {
-          n.remove();
-        } catch (e) {}
-      }
-    }
-
-    // Remove pure UI text nodes that can survive structural filtering.
-    const uiOnlyLineRe = /^(see more|see translation|show more|show translation|더 보기|번역 보기|번역 보기:|번역)$/i;
-    const raw = String(clone.innerText || clone.textContent || '');
-    const lines = raw
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => !!line && !uiOnlyLineRe.test(line));
-    const extracted = lines.join('\n').trim();
-    if (!extracted) {
-      return { status: 'not_found', extracted_text: '', text_length: 0 };
-    }
-    return {
-      status: 'success',
-      extracted_text: extracted,
-      text_length: extracted.length,
-    };
-  } catch (e) {
-    return { status: 'not_found', extracted_text: '', text_length: 0 };
-  }
-}
-
 function extractInstagramCaptionFromCoreItem(coreItem) {
   try {
     if (!coreItem || coreItem.nodeType !== 1) {
@@ -1696,160 +1621,6 @@ export function extractImageFromCoreItem(coreItem) {
       // Text-only post: do not fall back to first image (prevents avatar capture).
       return { image: null, usedCustomLogic: true };
     }
-    if (platform === SUPPORTED_PLATFORMS.LINKEDIN) {
-      const extractLinkedInPrimaryContentImage = (itemRoot) => {
-        try {
-          const feedRoot =
-            (itemRoot.matches?.('div[data-view-name="feed-full-update"]') ? itemRoot : null) ||
-            itemRoot.closest?.('div[data-view-name="feed-full-update"]') ||
-            itemRoot.querySelector?.('div[data-view-name="feed-full-update"]');
-          if (!feedRoot) {
-            return {
-              status: 'not_found',
-              item_type: null,
-              image_url: '',
-              alt_text: '',
-              url: '',
-            };
-          }
-
-          const noiseSelectors = [
-            'div[data-view-name="feed-header-actor-image"]',
-            'div[data-view-name="feed-actor-image"]',
-            'div[data-view-name="feed-reaction-count"]',
-          ];
-          const isNoiseImage = (img) => {
-            try {
-              if (!img || img.nodeType !== 1) return true;
-              return noiseSelectors.some((sel) => !!img.closest?.(sel));
-            } catch (e) {
-              return true;
-            }
-          };
-          const resolveBestImgUrl = (img) => {
-            try {
-              if (!img || img.nodeType !== 1) return '';
-              // === PHASE_IMAGE_URL_PIPELINE ===
-              const src = resolveAbsoluteImageUrl(
-                img.getAttribute?.('src') || img.currentSrc || img.src
-              );
-              const srcset = String(img.getAttribute?.('srcset') || '').trim();
-              const dataSrc = resolveAbsoluteImageUrl(
-                img.getAttribute?.('data-delayed-url') || img.getAttribute?.('data-src')
-              );
-              const dataLoaded = String(img.getAttribute?.('data-loaded') || '').trim().toLowerCase();
-              const isLinkedInMedia = (u) => String(u || '').includes('media.licdn.com/dms/image/');
-              const absSrcsetFirst = () => {
-                if (!srcset) return '';
-                const first = srcset.split(',').map((p) => p.trim().split(/\s+/)[0]).find(Boolean) || '';
-                return resolveAbsoluteImageUrl(first);
-              };
-
-              // High-res strategy:
-              // - data-loaded=true: prefer src
-              // - otherwise: prefer data-delayed-url/data-src, then src/srcset fallback
-              if (dataLoaded === 'true') {
-                if (isLinkedInMedia(src)) return src;
-                if (isLinkedInMedia(dataSrc)) return dataSrc;
-                const fromSet = absSrcsetFirst();
-                if (isLinkedInMedia(fromSet)) return fromSet;
-                return '';
-              }
-
-              if (isLinkedInMedia(dataSrc)) return dataSrc;
-              if (isLinkedInMedia(src)) return src;
-              const fromSet = absSrcsetFirst();
-              if (isLinkedInMedia(fromSet)) return fromSet;
-              return '';
-              // === END PHASE_IMAGE_URL_PIPELINE ===
-            } catch (e) {
-              return '';
-            }
-          };
-          const getArea = (el) => {
-            try {
-              const r = el?.getBoundingClientRect ? el.getBoundingClientRect() : null;
-              return r ? Math.max(0, r.width) * Math.max(0, r.height) : 0;
-            } catch (e) {
-              return 0;
-            }
-          };
-          const pickFromSelectors = (selectors, itemType, imageSelector = 'img', preferredUrlPattern = null) => {
-            let best = null;
-            let bestScore = -1;
-            for (const sel of selectors) {
-              const containers = Array.from(feedRoot.querySelectorAll?.(sel) || []);
-              for (const container of containers) {
-                const imgs = Array.from(container.querySelectorAll?.(imageSelector) || []);
-                for (const img of imgs) {
-                  if (String(img.tagName || '').toUpperCase() !== 'IMG') continue; // strict IMG only
-                  if (isNoiseImage(img)) continue;
-                  const url = resolveBestImgUrl(img);
-                  if (!url) continue;
-                  const area = getArea(img);
-                  const priorityBoost = preferredUrlPattern && preferredUrlPattern.test(url) ? 1_000_000_000 : 0;
-                  const score = priorityBoost + area;
-                  if (score > bestScore) {
-                    bestScore = score;
-                    best = {
-                      status: 'success',
-                      item_type: itemType,
-                      image_url: url,
-                      alt_text: String(img.getAttribute?.('alt') || '').trim(),
-                      url,
-                    };
-                  }
-                }
-              }
-            }
-            return best;
-          };
-
-          const priorityA = pickFromSelectors(['div[data-view-name="feed-update-image"]'], 'image');
-          if (priorityA) return priorityA;
-
-          const priorityB = pickFromSelectors(
-            [
-              'div.video-js',
-              'div.vjs-poster',
-              'div[aria-label="Video Player"]',
-              'div[data-view-name*="video"]',
-              'div[class*="video-player"]',
-            ],
-            'video_thumbnail',
-            'img.vjs-poster, img',
-            /videocover-(?:low|high)/i
-          );
-          if (priorityB) return priorityB;
-
-          const priorityC = pickFromSelectors(['div[data-view-name="feed-article-image"]'], 'article');
-          if (priorityC) return priorityC;
-
-          return {
-            status: 'not_found',
-            item_type: null,
-            image_url: '',
-            alt_text: '',
-            url: '',
-          };
-        } catch (e) {
-          return {
-            status: 'not_found',
-            item_type: null,
-            image_url: '',
-            alt_text: '',
-            url: '',
-          };
-        }
-      };
-
-      const linkedInResult = extractLinkedInPrimaryContentImage(coreItem);
-      if (linkedInResult?.status === 'success' && linkedInResult?.image_url) {
-        return { image: linkedInResult, usedCustomLogic: true };
-      }
-      return { image: linkedInResult, usedCustomLogic: true };
-    }
-
     if (platform === SUPPORTED_PLATFORMS.INSTAGRAM) {
       // Carousel-aware extraction. Multi-slide carousels show all
       // slides in the DOM (one <li> each) but only one is visible
@@ -2754,9 +2525,6 @@ export function normalizeShortcodeExtractionResult(result, platform = '') {
     const imageUrl = String(result?.imageUrl || '').trim();
     const title = String(result?.title || '').trim();
     const username = String(result?.username || '').trim();
-    if (p === 'LINKEDIN' && shortcode && !/^\d{19}$/.test(shortcode)) {
-      return { shortcode: '', activeHoverUrl, imageUrl, title, username };
-    }
     return { shortcode, activeHoverUrl, imageUrl, title, username };
   }
   return { shortcode: '', activeHoverUrl: '', imageUrl: '', title: '', username: '' };
@@ -2862,171 +2630,6 @@ function extractInstagramShortcode(element) {
           return shortcode;
         }
       }
-    }
-
-    return null;
-  } catch (e) {
-    return null;
-  }
-}
-
-function extractLinkedInShortcode(element) {
-  try {
-    if (!element || element.nodeType !== 1) return null;
-    const toLinkedInPayload = (id) => {
-      const shortcode = String(id || '').trim();
-      if (!/^\d{19}$/.test(shortcode)) return null;
-      return {
-        shortcode,
-        activeHoverUrl: `https://www.linkedin.com/feed/update/urn:li:activity:${shortcode}`,
-        platform: 'linkedin',
-      };
-    };
-    const extractPreferredNumericId = (text) => {
-      const s = String(text || '');
-      if (!s) return null;
-      const withContext =
-        s.match(/(?:updateUrn|ugcPost)[^0-9]{0,60}(\d{19})/i) ||
-        s.match(/urn(?:%253A|%3A|:|\.|\\u003a)?li(?:%253A|%3A|:|\.|\\u003a)?(?:activity|ugcPost)(?:%253A|%3A|:|\.|\\u003a)(\d{19})/i);
-      if (withContext && withContext[1]) return String(withContext[1]);
-      const any19 = s.match(/\b(\d{19})\b/);
-      return any19 && any19[1] ? String(any19[1]) : null;
-    };
-
-    const decodeByteArray = (arr) => {
-      try {
-        if (!Array.isArray(arr) || arr.length === 0) return null;
-        const bytes = arr
-          .map((n) => Number(n))
-          .filter((n) => Number.isFinite(n) && n >= 0 && n <= 255);
-        if (bytes.length === 0) return null;
-        if (typeof TextDecoder !== 'undefined') {
-          return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes));
-        }
-        return String.fromCharCode(...bytes);
-      } catch (e) {
-        return null;
-      }
-    };
-
-    const findBreadcrumbDataArray = (obj) => {
-      try {
-        if (!obj || typeof obj !== 'object') return null;
-        const direct = obj?.breadcrumb?.content?.data;
-        if (Array.isArray(direct)) return direct;
-        const stack = [obj];
-        let hops = 0;
-        while (stack.length > 0 && hops < 80) {
-          hops += 1;
-          const cur = stack.pop();
-          if (!cur || typeof cur !== 'object') continue;
-          const nested = cur?.breadcrumb?.content?.data;
-          if (Array.isArray(nested)) return nested;
-          for (const key of Object.keys(cur)) {
-            const v = cur[key];
-            if (v && typeof v === 'object') stack.push(v);
-          }
-        }
-        return null;
-      } catch (e) {
-        return null;
-      }
-    };
-
-    const normalizeTrackingScope = (raw) =>
-      String(raw || '')
-        .trim()
-        .replace(/&amp;/gi, '&')
-        .replace(/&quot;/gi, '"')
-        .replace(/&#34;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/%2522/gi, '"')
-        .replace(/%22/gi, '"')
-        .replace(/\\u003a/gi, ':')
-        .replace(/\\u002f/gi, '/')
-        .replace(/\\\//g, '/');
-
-    const tryExtractFromTrackingScope = (rawValue) => {
-      const normalized = normalizeTrackingScope(rawValue);
-      if (!normalized) return null;
-
-      // Source-of-truth validation: wrapper payload should carry breadcrumb/buffer-like content.
-      const hasSignal = /breadcrumb|buffer/i.test(normalized);
-      if (!hasSignal) return null;
-
-      // Regex-first fallback path (handles encoded/double-encoded delimiters).
-      const regexId =
-        normalized.match(/(?:activity|ugcPost)(?:%253A|%3A|:|\\u003a)(\d{19})/i) ||
-        normalized.match(/urn(?:%253A|%3A|:|\\u003a)?li(?:%253A|%3A|:|\\u003a)?(?:activity|ugcPost)(?:%253A|%3A|:|\\u003a)(\d{19})/i) ||
-        normalized.match(/\b(\d{19})\b/);
-      if (regexId && regexId[1]) return String(regexId[1]);
-
-      try {
-        const parsed = JSON.parse(normalized);
-        const bytes = findBreadcrumbDataArray(parsed);
-        const decoded = decodeByteArray(bytes);
-        const decodedId = extractPreferredNumericId(decoded);
-        if (decodedId) return decodedId;
-        const payloadId = extractPreferredNumericId(JSON.stringify(parsed));
-        if (payloadId) return payloadId;
-      } catch (e) {
-        // keep null and let ancestor traversal continue
-      }
-      return null;
-    };
-
-    const hasAnyDataViewAttribute = (node) => {
-      try {
-        if (!node || node.nodeType !== 1 || !node.attributes) return false;
-        return Array.from(node.attributes).some((attr) => String(attr?.name || '').toLowerCase().startsWith('data-view-'));
-      } catch (e) {
-        return false;
-      }
-    };
-
-    const isFeedBoundary = (node) => {
-      try {
-        if (!node || node.nodeType !== 1) return false;
-        const viewName = String(node.getAttribute?.('data-view-name') || '').toLowerCase().trim();
-        const role = String(node.getAttribute?.('role') || '').toLowerCase().trim();
-        const cls = String(node.className || '').toLowerCase();
-        const id = String(node.id || '').toLowerCase();
-        if (viewName.includes('feed')) return true;
-        if (role === 'feed') return true;
-        if (/(^|[-_])feed([-_]|$)/.test(cls) || /(^|[-_])feed([-_]|$)/.test(id)) return true;
-        return false;
-      } catch (e) {
-        return false;
-      }
-    };
-
-    // 1) Preferred lookup: nearest div with data-view-tracking-scope.
-    const nearestScopeDiv = element.closest?.('div[data-view-tracking-scope]');
-    if (nearestScopeDiv) {
-      const nearestRaw = nearestScopeDiv.getAttribute?.('data-view-tracking-scope');
-      const nearestId = tryExtractFromTrackingScope(nearestRaw);
-      const payload = toLinkedInPayload(nearestId);
-      if (payload) return payload;
-    }
-
-    // 2) Class-agnostic ancestor traversal:
-    //    inspect any ancestor with data-view-tracking-scope OR any data-view-* attribute.
-    let cur = element.parentElement;
-    let hops = 0;
-    while (cur && cur !== document.body && hops < 80) {
-      hops += 1;
-      const hasScopeAttr = cur.hasAttribute?.('data-view-tracking-scope');
-      const hasDataView = hasAnyDataViewAttribute(cur);
-      if (hasScopeAttr || hasDataView) {
-        const raw = String(cur.getAttribute?.('data-view-tracking-scope') || '').trim();
-        if (raw) {
-          const extracted = tryExtractFromTrackingScope(raw);
-          const payload = toLinkedInPayload(extracted);
-          if (payload) return payload;
-        }
-      }
-      if (isFeedBoundary(cur)) break;
-      cur = cur.parentElement;
     }
 
     return null;
@@ -3547,7 +3150,6 @@ function extractTikTokShortcode(_element) { return null; }
 
 const PLATFORM_CONFIG = {
   [SUPPORTED_PLATFORMS.INSTAGRAM]: extractInstagramShortcode,
-  [SUPPORTED_PLATFORMS.LINKEDIN]: extractLinkedInShortcode,
   [SUPPORTED_PLATFORMS.FACEBOOK]: extractFacebookShortcode,
   [SUPPORTED_PLATFORMS.X_TWITTER]: extractXTwitterShortcode,
   [SUPPORTED_PLATFORMS.REDDIT]: extractRedditShortcode,
@@ -3709,24 +3311,13 @@ export function extractMetadataForCoreItem(coreItem, closestAtag = null, hovered
     // === END PHASE_IMAGE_FROM_DOMINANT_PRIORITY ===
 
     const platform = getCurrentPlatform();
-    const linkedInCommentary =
-      platform === SUPPORTED_PLATFORMS.LINKEDIN
-        ? extractLinkedInCommentaryFromCoreItem(coreItem)
-        : { status: 'not_found', extracted_text: '', text_length: 0 };
     const instagramCaption =
       platform === SUPPORTED_PLATFORMS.INSTAGRAM
         ? extractInstagramCaptionFromCoreItem(coreItem)
         : { status: 'not_found', extracted_text: '', text_length: 0 };
-    const fullCommentaryText =
-      linkedInCommentary?.status === 'success' ? String(linkedInCommentary.extracted_text || '').trim() : '';
     const fullInstagramCaption =
       instagramCaption?.status === 'success' ? String(instagramCaption.extracted_text || '').trim() : '';
     const instagramUsername = String(instagramCaption?.username || '').trim();
-    const truncatedCommentaryTitle = fullCommentaryText
-      ? (fullCommentaryText.length > 100
-          ? `${fullCommentaryText.slice(0, 100).trimEnd()}...`
-          : fullCommentaryText)
-      : '';
     const instagramFirstLine = fullInstagramCaption
       ? String(fullInstagramCaption.split('\n').find((line) => String(line || '').trim()) || '').trim()
       : '';
@@ -3752,29 +3343,22 @@ export function extractMetadataForCoreItem(coreItem, closestAtag = null, hovered
         instagramComposedTitle ||
         fullInstagramCaption ||
         truncatedInstagramTitle ||
-        truncatedCommentaryTitle ||
         String(genericTitle || '').trim() ||
-        (platform === SUPPORTED_PLATFORMS.LINKEDIN
-          ? 'No text content'
-          : platform === SUPPORTED_PLATFORMS.INSTAGRAM
-            ? 'Instagram Post (No caption)'
-            : null);
-      titleIsCustom = !!(instagramComposedTitle || fullInstagramCaption || truncatedCommentaryTitle);
+        (platform === SUPPORTED_PLATFORMS.INSTAGRAM
+          ? 'Instagram Post (No caption)'
+          : null);
+      titleIsCustom = !!(instagramComposedTitle || fullInstagramCaption);
     }
     const resolvedDescription =
       fullInstagramCaption ||
-      fullCommentaryText ||
-      (platform === SUPPORTED_PLATFORMS.LINKEDIN
-        ? 'No text content'
-        : platform === SUPPORTED_PLATFORMS.INSTAGRAM
-          ? 'Instagram Post (No caption)'
-          : '');
+      (platform === SUPPORTED_PLATFORMS.INSTAGRAM
+        ? 'Instagram Post (No caption)'
+        : '');
     return {
       activeHoverUrl,
       title,
       description: resolvedDescription,
       content: resolvedDescription,
-      commentary: linkedInCommentary,
       caption: instagramCaption,
       image,
       imageIsCustom,
