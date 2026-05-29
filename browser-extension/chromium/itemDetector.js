@@ -599,13 +599,19 @@ function resolveMediaSelectorResults(nodes) {
     } else if (tag === 'SOURCE') {
       const parent = el.closest?.('video');
       if (parent) result.add(parent);
+    } else if (tag === 'SHREDDIT-PLAYER') {
+      // Reddit video host. Light-DOM element with poster attribute;
+      // the real <video> lives in its open shadow root, resolved
+      // lazily by videoElementToBlobAndDataUrl/extractVideoMediaInfo
+      // when needed.
+      result.add(el);
     }
   }
   return Array.from(result);
 }
 
 const MEDIA_SELECTOR =
-  'img[src], img[srcset], video[src], video[poster], video source[src]';
+  'img[src], img[srcset], video[src], video[poster], video source[src], shreddit-player[poster]';
 // === END PHASE_VIDEO_MEDIA_PARITY ===
 
 /** Mirrors extractMetadataForCoreItem getEffectiveImageRect for img nodes. */
@@ -1277,7 +1283,8 @@ export function findDominantImagesInElement(container) {
       // Image lazy-load fallback path is preserved (images may have
       // zero layout rect but still be significant via natural size +
       // parent rect — handled inside getEffectiveImageRectForImageGate).
-      if (String(innerImg.tagName || '').toUpperCase() === 'VIDEO') {
+      const innerTag = String(innerImg.tagName || '').toUpperCase();
+      if (innerTag === 'VIDEO' || innerTag === 'SHREDDIT-PLAYER') {
         const layoutRect = innerImg.getBoundingClientRect?.();
         if (!layoutRect || layoutRect.width <= 0 || layoutRect.height <= 0) {
           continue;

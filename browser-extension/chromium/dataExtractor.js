@@ -1286,11 +1286,19 @@ function extractInstagramCaptionFromCoreItem(coreItem) {
 //     fallback for the rare videoWidth=0 case (video not yet loaded)
 export function extractVideoMediaInfo(video) {
   try {
-    if (!video || String(video.tagName || '').toUpperCase() !== 'VIDEO') return null;
+    if (!video) return null;
+    const inputTag = String(video.tagName || '').toUpperCase();
+    if (inputTag !== 'VIDEO' && inputTag !== 'SHREDDIT-PLAYER') return null;
+    // For shreddit-player, poster attribute is on the host element,
+    // but videoWidth/videoHeight live on the shadow <video> (open shadow).
+    // Layout rect comes from the host (its visible box).
+    const shadowVideo = inputTag === 'SHREDDIT-PLAYER'
+      ? video.shadowRoot?.querySelector?.('video') || null
+      : video;
     const posterRaw = video.getAttribute?.('poster') || '';
     const posterUrl = posterRaw ? resolveAbsoluteImageUrl(posterRaw) : '';
-    const vw = Number(video.videoWidth) || 0;
-    const vh = Number(video.videoHeight) || 0;
+    const vw = Number(shadowVideo?.videoWidth) || 0;
+    const vh = Number(shadowVideo?.videoHeight) || 0;
     if (vw > 0 && vh > 0) {
       return { posterUrl, width: vw, height: vh };
     }
@@ -3263,7 +3271,7 @@ export function extractMetadataForCoreItem(coreItem, closestAtag = null, hovered
         // layout dimensions so consumers can render placeholder UI, and
         // the clipboard pipeline still attempts canvas capture.
         const dominantTag = String(dominantImg.tagName || '').toUpperCase();
-        if (dominantTag === 'VIDEO') {
+        if (dominantTag === 'VIDEO' || dominantTag === 'SHREDDIT-PLAYER') {
           const info = extractVideoMediaInfo(dominantImg);
           const r = dominantImg.getBoundingClientRect?.();
           const width = info?.width || Math.round(r?.width || 0);

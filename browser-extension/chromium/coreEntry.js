@@ -634,6 +634,19 @@ function refreshCoreItemMetadata(coreItem) {
 
         state.activeOverlayElement = newOverlay;
 
+        // === PHASE_OVERLAY_RECT_WATCHER_REPOINT ===
+        // Re-point the ResizeObserver to the new overlay element so its
+        // rect changes (responsive resize, lazy-loaded image dimensions
+        // settling, etc.) continue to drive highlight repaints after a
+        // refresh-driven reassignment. mountActiveOverlayRectWatcher is
+        // safe to call repeatedly — it unmounts the prior observer
+        // before mounting a new one. Skipped when newOverlay is null
+        // (which already triggers hideCoreHighlight below).
+        if (newOverlay) {
+          mountActiveOverlayRectWatcher(newOverlay);
+        }
+        // === END PHASE_OVERLAY_RECT_WATCHER_REPOINT ===
+
         if (newOverlay === null) {
           hideCoreHighlight();
         } else if (
@@ -735,6 +748,42 @@ function mountActiveCoreItemMutationObserver(coreItem) {
           );
           if (oldTransform !== newTransform) {
             relevant = true;
+            // === PHASE_CAROUSEL_TRANSITIONEND_REFRESH ===
+            // The mutation observer fires once when the inline transform
+            // is set (e.g. carousel slide-change), but the visual position
+            // animates over the CSS transition-duration. The 50 ms refresh
+            // debounce reads rects mid-animation, when no slide satisfies
+            // the center-X gate in isImageDominantInCoreItem — yielding an
+            // empty seed set and hiding the overlay. No further attribute
+            // mutation fires after the transition settles, so the overlay
+            // never re-acquires the now-centered slide.
+            //
+            // Mitigation: attach a one-shot transitionend listener on the
+            // same element. When the CSS transition for `transform`
+            // completes, fire one more refreshCoreItemMetadata against the
+            // settled rects. The debounced path is kept as-is to cover the
+            // `transition-duration: 0ms` instant case.
+            try {
+              const target = m?.target;
+              if (target && typeof target.addEventListener === 'function') {
+                target.addEventListener(
+                  'transitionend',
+                  (ev) => {
+                    if (!ev || ev.propertyName !== 'transform') return;
+                    if (coreItem !== state.activeCoreItem) return;
+                    try {
+                      refreshCoreItemMetadata(coreItem);
+                    } catch (e) {
+                      // Defensive: refresh failure must not propagate
+                    }
+                  },
+                  { once: true }
+                );
+              }
+            } catch (e) {
+              // Defensive: listener attach must not break the observer
+            }
+            // === END PHASE_CAROUSEL_TRANSITIONEND_REFRESH ===
             break;
           }
         }
@@ -1964,7 +2013,7 @@ async function saveActiveCoreItem(request = {}) {
           const dominantImg = dominantImgs.values().next().value || null;
           if (dominantImg) {
             const dominantTag = String(dominantImg.tagName || '').toUpperCase();
-            if (dominantTag === 'VIDEO') {
+            if (dominantTag === 'VIDEO' || dominantTag === 'SHREDDIT-PLAYER') {
               const info = extractVideoMediaInfo(dominantImg);
               const r = dominantImg.getBoundingClientRect?.();
               const width = info?.width || Math.round(r?.width || 0);
@@ -2214,6 +2263,13 @@ async function saveActiveCoreItem(request = {}) {
           if (tag === 'VIDEO') {
             // resolved URL (blob:, https:, etc.); ignores <source> children
             originSource = String(dominantEl.src || '').trim();
+          } else if (tag === 'SHREDDIT-PLAYER') {
+            // Use Reddit's stable post-id attribute (e.g. "t3_1tmhhvg")
+            // as dedup key. The host's .src is an HLS playlist URL with
+            // unstable per-session tokens, and the shadow <video>'s src
+            // is a per-session blob: URL — neither suitable as a stable
+            // dedup key.
+            originSource = String(dominantEl.getAttribute?.('post-id') || '').trim();
           } else {
             // IMG dominant — origin_source mirrors img_url (a resolved
             // high-res URL via resolveClipImageUrl)
@@ -2455,7 +2511,7 @@ function prefetchImageBlob(imageUrl, fallbackImgEl = null) {
         const fallbackTag = String(fallbackImgEl.tagName || '').toUpperCase();
         let b;
         // === PHASE_VIDEO_CLIP_CLIPBOARD ===
-        if (fallbackTag === 'VIDEO') {
+        if (fallbackTag === 'VIDEO' || fallbackTag === 'SHREDDIT-PLAYER') {
           b = await videoElementToBlob(fallbackImgEl);
         } else {
           b = await imgElementToBlob(fallbackImgEl);
@@ -2759,9 +2815,18 @@ async function captureVideoViaTabScreenshot(videoEl, maxDim) {
 // === END PHASE_VIDEO_TAB_SCREENSHOT_FALLBACK ===
 
 async function videoElementToBlobAndDataUrl(videoEl, maxDim = 1200) {
-  if (!videoEl || String(videoEl.tagName || '').toUpperCase() !== 'VIDEO') return null;
-  const srcW = Number(videoEl.videoWidth) || 0;
-  const srcH = Number(videoEl.videoHeight) || 0;
+  if (!videoEl) return null;
+  const inputTag = String(videoEl.tagName || '').toUpperCase();
+  if (inputTag !== 'VIDEO' && inputTag !== 'SHREDDIT-PLAYER') return null;
+  // For shreddit-player, resolve the shadow <video> (open shadow root).
+  // canvas.drawImage requires a real <video>/<img>/<canvas>, not a custom
+  // element host. videoWidth/videoHeight also live on the shadow video.
+  const realVideo = inputTag === 'SHREDDIT-PLAYER'
+    ? videoEl.shadowRoot?.querySelector?.('video') || null
+    : videoEl;
+  if (!realVideo) return null;
+  const srcW = Number(realVideo.videoWidth) || 0;
+  const srcH = Number(realVideo.videoHeight) || 0;
   if (srcW <= 0 || srcH <= 0) return null;
   try {
     const scale = Math.min(maxDim / srcW, maxDim / srcH, 1);
@@ -2772,7 +2837,7 @@ async function videoElementToBlobAndDataUrl(videoEl, maxDim = 1200) {
     canvas.height = dstH;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    ctx.drawImage(videoEl, 0, 0, dstW, dstH);
+    ctx.drawImage(realVideo, 0, 0, dstW, dstH);
     // dataURL is sync (and throws SecurityError on tainted canvas)
     let dataUrl = null;
     try {
@@ -2969,7 +3034,8 @@ function performSyncClipboardWrite(state) {
   // and routing to videoElementToBlobAndDataUrl restores correctness.
   if (activeItem instanceof Element) {
     const dominantElPriority = pickDominantImageElement(activeItem);
-    if (dominantElPriority && String(dominantElPriority.tagName || '').toUpperCase() === 'VIDEO') {
+    const priorityTag = dominantElPriority ? String(dominantElPriority.tagName || '').toUpperCase() : '';
+    if (dominantElPriority && (priorityTag === 'VIDEO' || priorityTag === 'SHREDDIT-PLAYER')) {
       const combinedPromise = videoElementToBlobAndDataUrl(dominantElPriority, 1200)
         .catch(() => null);
       const blobPromise = combinedPromise.then((r) => r?.blob || null);
@@ -2994,7 +3060,7 @@ function performSyncClipboardWrite(state) {
             const dominantTag = String(dominantEl.tagName || '').toUpperCase();
             let b;
             // === PHASE_VIDEO_CLIP_CLIPBOARD ===
-            if (dominantTag === 'VIDEO') {
+            if (dominantTag === 'VIDEO' || dominantTag === 'SHREDDIT-PLAYER') {
               b = await videoElementToBlob(dominantEl);
             } else {
               b = await imgElementToBlob(dominantEl);
@@ -3020,8 +3086,9 @@ function performSyncClipboardWrite(state) {
   // (Poster URL is no longer consulted; canvas frame is the source of truth
   // for all three outputs. See PHASE_VIDEO_CANVAS_FRAME_AS_IMGURL.)
   if (activeItem instanceof Element) {
-    const dominantEl = pickDominantImageElement(activeItem);
-    if (dominantEl && String(dominantEl.tagName || '').toUpperCase() === 'VIDEO') {
+      const dominantEl = pickDominantImageElement(activeItem);
+    const fallbackTag = dominantEl ? String(dominantEl.tagName || '').toUpperCase() : '';
+    if (dominantEl && (fallbackTag === 'VIDEO' || fallbackTag === 'SHREDDIT-PLAYER')) {
       // Single drawImage produces both blob and dataUrl — same frame.
       const combinedPromise = videoElementToBlobAndDataUrl(dominantEl, 1200)
         .catch(() => null);
@@ -3056,7 +3123,7 @@ async function performClipboardCopy(category, url, rootElementForDominant, optio
           if (dominantEl) {
             const dominantTag = String(dominantEl.tagName || '').toUpperCase();
             // === PHASE_VIDEO_CLIP_CLIPBOARD ===
-            if (dominantTag === 'VIDEO') {
+            if (dominantTag === 'VIDEO' || dominantTag === 'SHREDDIT-PLAYER') {
               blob = await videoElementToBlob(dominantEl);
             } else {
               blob = await imgElementToBlob(dominantEl);
@@ -3073,7 +3140,8 @@ async function performClipboardCopy(category, url, rootElementForDominant, optio
       } catch (_) { /* fall through */ }
     } else if (rootElementForDominant instanceof Element) {
       const dominantEl = pickDominantImageElement(rootElementForDominant);
-      if (dominantEl && String(dominantEl.tagName || '').toUpperCase() === 'VIDEO') {
+      const videoFallbackTag = dominantEl ? String(dominantEl.tagName || '').toUpperCase() : '';
+      if (dominantEl && (videoFallbackTag === 'VIDEO' || videoFallbackTag === 'SHREDDIT-PLAYER')) {
         try {
           const blob = await videoElementToBlob(dominantEl);
           if (blob) {
