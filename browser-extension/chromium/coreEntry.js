@@ -387,58 +387,6 @@ function withInstagramActiveHoverUrl(meta = {}, coreItem = null, cachedExtractio
   return { ...meta, shortcode, activeHoverUrl: assignedUrl };
 }
 
-function withThreadsActiveHoverUrl(meta = {}, coreItem = null, cachedExtraction = null) {
-  const platform = String(meta?.platform || '').toUpperCase();
-  if (platform !== 'THREADS') return meta;
-  const extracted =
-    cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platform);
-  const activeHoverUrl = String(extracted.activeHoverUrl || meta?.activeHoverUrl || '').trim();
-  if (!activeHoverUrl) return meta;
-  const shortcode = String(meta?.shortcode || extracted.shortcode || activeHoverUrl).trim();
-  const username = String(extracted.username || meta?.username || '').trim();
-  const rawMessage = String(extracted.title || meta?.title || '').trim();
-  const alreadyComposed = !!(username && rawMessage.startsWith(`${username}'s post\n`));
-  const message = rawMessage.length > 180 ? `${rawMessage.slice(0, 180).trimEnd()}...` : rawMessage;
-  let title = 'Threads post';
-  if (alreadyComposed) {
-    title = message;
-  } else if (username && message) {
-    title = `${username}'s post\n${message}`;
-  } else if (message) {
-    title = message;
-  } else if (username) {
-    title = `${username}'s post`;
-  }
-  return { ...meta, activeHoverUrl, shortcode, ...(username ? { username } : {}), title };
-}
-
-function withFacebookTimestampActiveHoverUrl(meta = {}, coreItem = null, cachedExtraction = null) {
-  const platform = String(meta?.platform || '').toUpperCase();
-  if (platform !== 'FACEBOOK') return meta;
-  const extracted =
-    cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platform);
-  const fallbackUrl = String(meta?.activeHoverUrl || '').trim();
-  const activeHoverUrl = String(extracted.activeHoverUrl || '').trim() || fallbackUrl;
-  if (!activeHoverUrl) return meta;
-  const imageUrl = String(extracted.imageUrl || '').trim();
-  const rawTitle = String(extracted.title || meta?.title || '').trim();
-  const username = String(extracted.username || meta?.username || '').trim();
-  const nextMeta = { ...meta, activeHoverUrl };
-  if (imageUrl) {
-    nextMeta.image = { ...(meta?.image || {}), url: imageUrl };
-  }
-  if (username) {
-    nextMeta.username = username;
-    nextMeta.title = rawTitle ? `${username}'s post\n${rawTitle}` : `${username}'s post`;
-  } else if (rawTitle) {
-    nextMeta.title = rawTitle;
-  } else {
-    nextMeta.title = "Facebook's post";
-  }
-  if ('shortcode' in nextMeta) delete nextMeta.shortcode;
-  return nextMeta;
-}
-
 // === PHASE_COREITEM_LIVE_METADATA ===
 // Sync re-extraction + sync-safe enrichment of activeCoreItem metadata.
 // Called from observer's debounced callback on <a> mutation. Does NOT
@@ -501,20 +449,6 @@ function refreshCoreItemMetadata(coreItem) {
         coreItem,
         cachedExtraction
       );
-    } else if (evidenceType === 'B' && platformForB === 'THREADS') {
-      const th = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-      meta = withThreadsActiveHoverUrl(
-        { ...meta, platform: platformForB, ...(th.shortcode ? { shortcode: th.shortcode } : {}), ...(th.activeHoverUrl ? { activeHoverUrl: th.activeHoverUrl } : {}) },
-        coreItem,
-        cachedExtraction
-      );
-    } else if (evidenceType === 'B' && platformForB === 'FACEBOOK') {
-      const fb = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-      meta = withFacebookTimestampActiveHoverUrl(
-        { ...meta, platform: platformForB, ...(fb.activeHoverUrl ? { activeHoverUrl: fb.activeHoverUrl } : {}), ...(fb.imageUrl ? { image: { ...(meta?.image || {}), url: fb.imageUrl } } : {}) },
-        coreItem,
-        cachedExtraction
-      );
     }
 
     if (evidenceType === 'E') {
@@ -552,15 +486,13 @@ function refreshCoreItemMetadata(coreItem) {
     if (evidenceType === 'B') {
       const platform = getCurrentPlatform();
       syncedMeta = { ...syncedMeta, platform };
-      if (platform !== 'FACEBOOK') {
-        const shortcodeResult = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platform);
-        if (shortcodeResult?.shortcode) {
-          syncedMeta = {
-            ...syncedMeta,
-            shortcode: shortcodeResult.shortcode,
-            ...(shortcodeResult.activeHoverUrl ? { activeHoverUrl: shortcodeResult.activeHoverUrl } : {}),
-          };
-        }
+      const shortcodeResult = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platform);
+      if (shortcodeResult?.shortcode) {
+        syncedMeta = {
+          ...syncedMeta,
+          shortcode: shortcodeResult.shortcode,
+          ...(shortcodeResult.activeHoverUrl ? { activeHoverUrl: shortcodeResult.activeHoverUrl } : {}),
+        };
       }
       if (instagramPreresolvedUrl) {
         syncedMeta = {
@@ -570,8 +502,6 @@ function refreshCoreItemMetadata(coreItem) {
       } else {
         syncedMeta = withInstagramActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
       }
-      syncedMeta = withThreadsActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
-      syncedMeta = withFacebookTimestampActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
     }
 
     if (syncedMeta.activeHoverUrl) {
@@ -1113,20 +1043,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
       coreItem,
       cachedExtraction
     );
-  } else if (evidenceType === 'B' && platformForB === 'THREADS') {
-    const th = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-    meta = withThreadsActiveHoverUrl(
-      { ...meta, platform: platformForB, ...(th.shortcode ? { shortcode: th.shortcode } : {}), ...(th.activeHoverUrl ? { activeHoverUrl: th.activeHoverUrl } : {}) },
-      coreItem,
-      cachedExtraction
-    );
-  } else if (evidenceType === 'B' && platformForB === 'FACEBOOK') {
-    const fb = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platformForB);
-    meta = withFacebookTimestampActiveHoverUrl(
-      { ...meta, platform: platformForB, ...(fb.activeHoverUrl ? { activeHoverUrl: fb.activeHoverUrl } : {}), ...(fb.imageUrl ? { image: { ...(meta?.image || {}), url: fb.imageUrl } } : {}) },
-      coreItem,
-      cachedExtraction
-    );
   }
 
   // === PHASE27F_TYPE_E_OVERRIDES ===
@@ -1198,21 +1114,18 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     return false;
   }
 
-  // Type B post-extraction shortcode + Facebook timestamp
-  // enrichment (preserved).
+  // Type B post-extraction shortcode enrichment (preserved).
   let syncedMeta = meta;
   if (evidenceType === 'B') {
     const platform = getCurrentPlatform();
     syncedMeta = { ...syncedMeta, platform };
-    if (platform !== 'FACEBOOK') {
-      const shortcodeResult = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platform);
-      if (shortcodeResult?.shortcode) {
-        syncedMeta = {
-          ...syncedMeta,
-          shortcode: shortcodeResult.shortcode,
-          ...(shortcodeResult.activeHoverUrl ? { activeHoverUrl: shortcodeResult.activeHoverUrl } : {}),
-        };
-      }
+    const shortcodeResult = cachedExtraction ?? normalizeShortcodeExtractionResult(extractShortcode(coreItem), platform);
+    if (shortcodeResult?.shortcode) {
+      syncedMeta = {
+        ...syncedMeta,
+        shortcode: shortcodeResult.shortcode,
+        ...(shortcodeResult.activeHoverUrl ? { activeHoverUrl: shortcodeResult.activeHoverUrl } : {}),
+      };
     }
     if (instagramPreresolvedUrl) {
       syncedMeta = {
@@ -1222,8 +1135,6 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     } else {
       syncedMeta = withInstagramActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
     }
-    syncedMeta = withThreadsActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
-    syncedMeta = withFacebookTimestampActiveHoverUrl(syncedMeta, coreItem, cachedExtraction);
   }
 
   // Category enrichment (preserved, runs for any type with a URL).

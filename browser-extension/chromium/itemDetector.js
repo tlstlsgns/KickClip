@@ -33,12 +33,8 @@ const TYPE_B_CROSS_TAG_EXCEPTIONS = new Set(['shreddit-ad-post']);
 // is skipped to prevent false positives on non-SNS sites.
 const TYPE_B_PLATFORMS = new Set([
   SUPPORTED_PLATFORMS.INSTAGRAM,
-  SUPPORTED_PLATFORMS.FACEBOOK,
   SUPPORTED_PLATFORMS.REDDIT,
-  SUPPORTED_PLATFORMS.THREADS,
-  SUPPORTED_PLATFORMS.TIKTOK,
   SUPPORTED_PLATFORMS.X_TWITTER,
-  SUPPORTED_PLATFORMS.LINKEDIN,
 ]);
 const STABLE_SIG_ATTR_KEYS = new Set([
   'data-type',
@@ -1879,129 +1875,6 @@ async function isMeaningfulItemMap(elements, evidenceType) {
   return avgText > 20;
 }
 
-function detectFacebookFallback(root, existingElements = new Set()) {
-  try {
-    const href = String(window?.location?.href || '').trim();
-    if (!href) return [];
-    const isFacebookHome = href === 'https://www.facebook.com/';
-    if (!isFacebookHome) return [];
-    if (!root || typeof root.querySelectorAll !== 'function') return [];
-
-    const toAbsoluteHref = (rawHref) => {
-      const raw = String(rawHref || '').trim();
-      if (!raw) return '';
-      try {
-        return new URL(raw, window.location.href).href;
-      } catch (e) {
-        return raw;
-      }
-    };
-    const sanitizeShortcode = (absoluteHref) => {
-      const s = String(absoluteHref || '').trim();
-      if (!s) return '';
-      try {
-        const u = new URL(s, window.location.href);
-        const base = `${u.origin}${u.pathname}${u.search}`.trim();
-        return base || u.href;
-      } catch (e) {
-        return s;
-      }
-    };
-
-    const out = [];
-    const units = Array.from(root.querySelectorAll('div[data-pagelet="FeedUnit_0"], div[data-pagelet="FeedUnit_1"]') || []);
-    for (const unit of units) {
-      if (!unit || unit.nodeType !== 1) continue;
-      if (existingElements.has(unit)) continue;
-
-      const linkNodes = Array.from(unit.querySelectorAll?.('a[role="link"][href]') || []);
-      const isDateTimeAriaLabel = (anchor) => {
-        try {
-          const aria = String(anchor?.getAttribute?.('aria-label') || '').trim();
-          if (!aria) return false;
-          if (/\b\d{1,2}\s*월\s*\d{1,2}\s*일\b/.test(aria)) return true;
-          if (/\b(?:오전|오후)\s*\d{1,2}:\d{2}\b/.test(aria)) return true;
-          if (/\b\d{1,2}:\d{2}\b/.test(aria) && /\b\d{1,2}[./-]\d{1,2}\b/.test(aria)) return true;
-          if (/\b\d+\s*(?:min|mins|minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s+ago\b/i.test(aria)) return true;
-          return false;
-        } catch (e) {
-          return false;
-        }
-      };
-      const orderedLinks = [
-        ...linkNodes.filter((a) => isDateTimeAriaLabel(a)),
-        ...linkNodes.filter((a) => !isDateTimeAriaLabel(a)),
-      ];
-      let activeHoverUrl = '';
-      let shortcode = '';
-      for (const a of orderedLinks) {
-        const rawHref = String(a.getAttribute?.('href') || a.href || '').trim();
-        if (!rawHref) continue;
-        const abs = toAbsoluteHref(rawHref);
-        const normalized = sanitizeShortcode(abs);
-        if (abs && normalized) {
-          activeHoverUrl = abs;
-          shortcode = normalized;
-          break;
-        }
-      }
-      if (!activeHoverUrl) activeHoverUrl = 'https://www.facebook.com/';
-      if (!shortcode) shortcode = 'https://www.facebook.com/';
-
-      const hasMedia = !!unit.querySelector?.('video, img');
-      const pagelet = String(unit.getAttribute?.('data-pagelet') || '').trim();
-      const identitySig = getElementSignature(unit) || 'DIV::A:fb_feedunit_fallback';
-      const structureSig = getInternalStructure(unit, 3) || 'fb_fallback_structure';
-      const signature = `FB_FALLBACK::${pagelet || 'unknown'}::${identitySig}::${structureSig}`;
-      // === PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
-      // Type B no longer requires a dominant image. Text-only SNS posts are
-      // eligible when structural and share-button criteria pass. Dominant
-      // images still populate seedImages for hover activation; text-only
-      // posts may have an empty seedImages set.
-      // === PHASE_TYPE_B_DOMINANT_UNIFICATION ===
-      // See main Type B registration above for rationale: dominant-image
-      // gate provides activation key + carousel slide selection.
-      const seedImages = findDominantImagesInElement(unit);
-      // === END PHASE_TYPE_B_DOMINANT_UNIFICATION ===
-      // === END PHASE_TYPE_B_DROP_DOMINANT_IMAGE ===
-      // === PHASE27E_HOVER_COMPANIONS (Type B facebook fallback) ===
-      const hoverCompanions = new Set();
-      try {
-        for (const seedImg of seedImages) {
-          // Phase 27e: pass `unit` (the FeedUnit container) as scope.
-          for (const comp of findHoverCompanions(seedImg, unit)) {
-            hoverCompanions.add(comp);
-          }
-        }
-      } catch (e) {}
-      // === END PHASE27E_HOVER_COMPANIONS ===
-      out.push({
-        key: signature,
-        signature,
-        itemMapSignature: signature,
-        identitySignature: identitySig,
-        structureSignature: structureSig,
-        evidenceType: EVIDENCE_TYPE_INTERACTION,
-        element: unit,
-        seedImages,
-        // === PHASE27D_HOVER_COMPANIONS_FIELD ===
-        hoverCompanions,
-        // === END PHASE27D_HOVER_COMPANIONS_FIELD ===
-        similarityType: 'facebook-feedunit-fallback',
-        classPattern: '',
-        attrKey: 'data-pagelet',
-        attrValue: pagelet,
-        shortcode,
-        activeHoverUrl,
-        platform: 'facebook',
-      });
-    }
-    return out;
-  } catch (e) {
-    return [];
-  }
-}
-
 // === TYPED_REDESIGN_PHASE20 START ===
 // Phase 20 — Type D ItemMap redesign: image-first detection.
 //
@@ -3008,12 +2881,7 @@ const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItem
 
     // Bottom-up anchor recovery disabled: prevents editorial content (e.g. #topic_contents) from
     // being misclassified as ItemMaps when scattered reference links climb to large parent containers.
-    // Facebook Home fallback: add FeedUnit_* containers when primary Type B evidence is not yet hydrated.
-    const existingFilteredElements = new Set(
-      expandedFiltered.map((x) => x?.element).filter(Boolean)
-    );
-    const fallbackItems = detectFacebookFallback(root, existingFilteredElements);
-    let merged = [...expandedFiltered, ...fallbackItems];
+    let merged = [...expandedFiltered];
 
     // De-duplicate by element after fallback merge.
     // === PHASE_TYPE_B_DE_INTEGRATION ===
