@@ -14,6 +14,10 @@ import {
   normalizeShortcodeExtractionResult,
   hasCustomImageLogic,
   hasCustomTitleLogic,
+  resolveAbsoluteImageUrl,
+  isAnchorLike,
+  cardHasNavigableAnchor,
+  closestAnchorLike,
   SUPPORTED_PLATFORMS,
 } from './dataExtractor.js';
 
@@ -559,6 +563,121 @@ export function isMediaElement(el) {
   return tag === 'IMG' || tag === 'VIDEO';
 }
 
+// === PHASE_BG_IMAGE_HELPERS ===
+// Helpers to admit inline-`background-image` URL-bearing elements
+// (typically <div>) as first-class media candidates for Type B/D
+// detection. Inline-only (NOT getComputedStyle) — limited to elements
+// whose author explicitly placed `style="background-image: url(...)"`
+// in markup. URL allowlist is path-extension based to reject SVG
+// patterns, sprites, gradients, and CDN format-in-query schemes.
+// Profile_images / profile_banners paths are rejected to prevent
+// X(Twitter) profile avatars/banners from spuriously becoming
+// dominants on profile pages.
+
+/**
+ * Extracts the first http(s) `url(...)` value from an element's
+ * inline `style="background-image: ..."`, resolves to absolute,
+ * and validates the URL against the allowlist. Returns '' on any
+ * failure (no inline style, no url(), non-allowlisted scheme/path).
+ */
+export function extractInlineBackgroundImageUrl(el) {
+  try {
+    if (!el || el.nodeType !== 1) return '';
+    // === PHASE_BG_IMAGE_FAST_PATH ===
+    // Fast path (Round 9): el.style.backgroundImage is the inline
+    // CSSOM view of the standard background-image property.
+    const raw = el.style?.backgroundImage;
+    if (raw && raw !== 'none' && raw.indexOf('url(') !== -1) {
+      const m = raw.match(/url\(\s*(['"]?)([^'")]+)\1\s*\)/);
+      if (m) {
+        const candidate = String(m[2] || '').trim();
+        if (candidate) {
+          const absolute = resolveAbsoluteImageUrl(candidate);
+          if (absolute && isAllowedBackgroundImageUrl(absolute)) return absolute;
+        }
+      }
+    }
+    // === END PHASE_BG_IMAGE_FAST_PATH ===
+    // === PHASE_BG_IMAGE_INLINE_CUSTOM_PROP ===
+    // Fallback (Round 11): parse the raw inline style attribute to
+    // catch backgrounds defined via CSS custom properties (e.g.,
+    // `--album-background: url(...)`) or `background` shorthand.
+    const inlineStyle = el.getAttribute?.('style') || '';
+    if (!inlineStyle || inlineStyle.indexOf('url(') === -1) return '';
+    const declarations = inlineStyle.split(';');
+    for (const decl of declarations) {
+      const colonIdx = decl.indexOf(':');
+      if (colonIdx === -1) continue;
+      const propName = decl.substring(0, colonIdx).trim();
+      const propValue = decl.substring(colonIdx + 1);
+      if (!propName || !propValue) continue;
+      const isBackgroundProp = /^background(?:-image)?$/i.test(propName);
+      const isBackgroundCustomProp = /^--[-\w]*/.test(propName)
+        && /background|bg/i.test(propName);
+      if (!isBackgroundProp && !isBackgroundCustomProp) continue;
+      const m = propValue.match(/url\(\s*(['"]?)([^'")]+)\1\s*\)/);
+      if (!m) continue;
+      const candidate = String(m[2] || '').trim();
+      if (!candidate) continue;
+      const absolute = resolveAbsoluteImageUrl(candidate);
+      if (!absolute) continue;
+      if (!isAllowedBackgroundImageUrl(absolute)) continue;
+      return absolute;
+    }
+    // === END PHASE_BG_IMAGE_INLINE_CUSTOM_PROP ===
+    return '';
+  } catch (_) {
+    return '';
+  }
+}
+
+/**
+ * URL allowlist for background-image admission:
+ * - http(s) only (rejects data:/blob:/file:)
+ * - path ends in .jpg/.jpeg/.png/.webp/.gif/.avif (case-insensitive)
+ * - reject paths containing 'profile_images' or 'profile_banners'
+ *   (X/Twitter profile-page regression guard — these patterns cover
+ *    avatars and banners that would otherwise spuriously become
+ *    dominants on user profile pages)
+ */
+export function isAllowedBackgroundImageUrl(url) {
+  try {
+    if (!url) return false;
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const path = u.pathname || '';
+    // Reject path patterns: X profile resources.
+    if (/profile_images|profile_banners/i.test(path)) return false;
+    // Path must end in an allowed image extension.
+    return /\.(jpe?g|png|webp|gif|avif)$/i.test(path);
+  } catch (_) {
+    return false;
+  }
+}
+// === END PHASE_BG_IMAGE_HELPERS ===
+
+// === PHASE_TYPE_E_DIV_ADMISSION_HELPER ===
+// Broader media admission predicate for Type E detection. Returns
+// true for IMG/VIDEO (via isMediaElement) OR for any element where
+// extractInlineBackgroundImageUrl returns a non-empty URL (i.e., the
+// element passed Round 9's inline-bg-image admission gate with the
+// path-extension allowlist + X profile-images/banners regression
+// guard).
+//
+// Used ONLY at the three Type E gates (detectTypeEItemMaps candidate
+// filter, buildImageToItem Type E registration, pickDominantImageElement
+// self-return). Other isMediaElement consumers (visibility relax,
+// map-check, anchor-register) intentionally stay scoped to IMG/VIDEO
+// — see diagnostic Q1.C for the per-consumer audit.
+//
+// Type D anchor extension and CSS custom property bg detection are
+// out of scope for this helper; they are tracked separately.
+export function isMediaCandidateElement(el) {
+  if (isMediaElement(el)) return true;
+  return !!extractInlineBackgroundImageUrl(el);
+}
+// === END PHASE_TYPE_E_DIV_ADMISSION_HELPER ===
+
 function getMediaIntrinsicSize(el) {
   if (!el || el.nodeType !== 1) {
     return { width: 0, height: 0 };
@@ -601,13 +720,32 @@ function resolveMediaSelectorResults(nodes) {
       // lazily by videoElementToBlobAndDataUrl/extractVideoMediaInfo
       // when needed.
       result.add(el);
+    } else if (extractInlineBackgroundImageUrl(el)) {
+      // === PHASE_BG_IMAGE_ADMISSION ===
+      // Inline bg-image element passing the inline-style + URL
+      // allowlist gate (extractInlineBackgroundImageUrl returns
+      // truthy only for http(s) URLs with allowed image extensions,
+      // and rejects X profile_images/profile_banners paths). Admits
+      // typically <div> elements but is tag-agnostic.
+      // === END PHASE_BG_IMAGE_ADMISSION ===
+      result.add(el);
     }
   }
   return Array.from(result);
 }
 
+// === PHASE_BG_IMAGE_SELECTOR_EXT ===
+// Append [style*="background-image"] (Round 9) and
+// [style*="background"] (Round 11) to admit elements with bg-URL
+// in standard property or in CSS custom properties / background
+// shorthand (e.g., --album-background, background: url(...)).
+// The substring selector over-matches gradients/colors/custom
+// properties without url(); resolveMediaSelectorResults filters
+// those via extractInlineBackgroundImageUrl's per-declaration
+// property-name guard + URL allowlist.
+// === END PHASE_BG_IMAGE_SELECTOR_EXT ===
 const MEDIA_SELECTOR =
-  'img[src], img[srcset], video[src], video[poster], video source[src], shreddit-player[poster]';
+  'img[src], img[srcset], video[src], video[poster], video source[src], shreddit-player[poster], [style*="background-image"], [style*="background"]';
 // === END PHASE_VIDEO_MEDIA_PARITY ===
 
 /** Mirrors extractMetadataForCoreItem getEffectiveImageRect for img nodes. */
@@ -1376,6 +1514,40 @@ export function findDominantImagesInElement(container, evidenceType = '') {
     }
     // === END PHASE_TYPE_B_RELAXED_AXIAL_BEST_MATCH ===
 
+    // === PHASE_CONTAINER_SELF_BG_DOMINANT ===
+    // When no descendant media candidate passes dominance gates,
+    // consider the container itself as a candidate IF it's a media
+    // candidate (admitted by Round 9's bg-image allowlist or is
+    // IMG/VIDEO via isMediaElement). This handles sites where the
+    // visual content is on the container's own bg-image (e.g.,
+    // Trip.com pdt-card with --album-background) and the only
+    // descendants are decorative IMGs (tag badges, etc.) that fail
+    // dominance.
+    //
+    // Precedence: descendants first; container-self only when no
+    // descendant passed. This preserves existing card layouts where
+    // the dominant is a real descendant IMG.
+    if (passing.length === 0 && isMediaCandidateElement(container)) {
+      const selfRect = getEffectiveImageRectForImageGate(container);
+      if (selfRect) {
+        const selfPasses = isTypeB
+          ? passesAxialRatioRelaxed(selfRect, rect)
+          : isImageDominantInCoreItem(selfRect, rect);
+        if (selfPasses) {
+          if (isTypeB) {
+            const coreCenterX = (Number(rect?.left) || 0) + (Number(rect?.width) || 0) / 2;
+            const imgCenterX = (Number(selfRect?.left) || 0) + (Number(selfRect?.width) || 0) / 2;
+            const distance = Math.abs(imgCenterX - coreCenterX);
+            passing.push(container);
+            passingDistances.push(distance);
+          } else {
+            passing.push(container);
+          }
+        }
+      }
+    }
+    // === END PHASE_CONTAINER_SELF_BG_DOMINANT ===
+
     if (passing.length === 0) return out;
     if (passing.length === 1) {
       out.add(passing[0]);
@@ -1400,26 +1572,29 @@ export function findDominantImagesInElement(container, evidenceType = '') {
     }
     // === END PHASE_TYPE_B_BEST_MATCH_WINNER ===
 
-    // === PHASE_IMG_PRIORITY_OVER_SAME_RECT_VIDEO ===
-    // When an IMG and a VIDEO share approximately the same rect (e.g., a
-    // static thumbnail <img> with an autoplay <video> overlay on hover),
-    // prefer IMG regardless of z-index. Rationale:
-    // - IMG src (or srcset highest-descriptor) is usually higher resolution
-    //   than viewport-bound video frame capture.
-    // - Hover-overlay videos are typically interaction effects rather than
-    //   the user's intended target; the static IMG is what's perceived as
-    //   "the content."
-    // Operates by removing VIDEOs that overlap with any IMG candidate
-    // (±5px on each rect coordinate to absorb subpixel rendering).
+    // === PHASE_IMG_PRIORITY_OVER_SAME_RECT_NON_IMG ===
+    // When an IMG and a non-IMG (VIDEO or background-image DIV) share
+    // approximately the same rect, prefer IMG. Rationale (unchanged
+    // for VIDEO case):
+    // - IMG src (or srcset highest-descriptor) is usually a higher-
+    //   resolution canonical content URL than a viewport-bound video
+    //   frame capture or a bg-image URL.
+    // - Hover-overlay videos and DIV bg-image hit-targets stacked on
+    //   real <img> content are typically interaction effects, not
+    //   the user's intended dominant target.
+    // Operates by removing non-IMG candidates that overlap with any
+    // IMG candidate (±5px on each rect coordinate).
+    // === END PHASE_IMG_PRIORITY_OVER_SAME_RECT_NON_IMG ===
     let filteredPassing = passing;
     try {
       const passingImgs = passing.filter((el) =>
         String(el?.tagName || '').toUpperCase() === 'IMG'
       );
-      const passingVideos = passing.filter((el) =>
-        String(el?.tagName || '').toUpperCase() === 'VIDEO'
-      );
-      if (passingImgs.length > 0 && passingVideos.length > 0) {
+      const passingNonImgs = passing.filter((el) => {
+        const tag = String(el?.tagName || '').toUpperCase();
+        return tag !== 'IMG';
+      });
+      if (passingImgs.length > 0 && passingNonImgs.length > 0) {
         const TOLERANCE = 5;
         const rectOf = (el) => {
           try { return el.getBoundingClientRect?.() || null; } catch (_) { return null; }
@@ -1434,23 +1609,22 @@ export function findDominantImagesInElement(container, evidenceType = '') {
           );
         };
         const imgRects = passingImgs.map(rectOf);
-        const removedVideos = new Set();
-        for (const video of passingVideos) {
-          const vr = rectOf(video);
-          if (!vr) continue;
+        const removedNonImgs = new Set();
+        for (const nonImg of passingNonImgs) {
+          const nr = rectOf(nonImg);
+          if (!nr) continue;
           for (const ir of imgRects) {
-            if (sameRect(vr, ir)) {
-              removedVideos.add(video);
+            if (sameRect(nr, ir)) {
+              removedNonImgs.add(nonImg);
               break;
             }
           }
         }
-        if (removedVideos.size > 0) {
-          filteredPassing = passing.filter((el) => !removedVideos.has(el));
+        if (removedNonImgs.size > 0) {
+          filteredPassing = passing.filter((el) => !removedNonImgs.has(el));
         }
       }
     } catch (_) { /* defensive — fall through with original passing */ }
-    // === END PHASE_IMG_PRIORITY_OVER_SAME_RECT_VIDEO ===
 
     // Single-dominant selection (Fix 2): elementFromPoint at center,
     // candidate-self-or-descendant means "visually on top here".
@@ -2248,17 +2422,13 @@ async function detectTypeDItemMaps(root = document) {
       if (!cardDominantImgs.size) continue;
       // === END PHASE27A_TYPE_D_DOMINANT_IMAGES ===
 
-      // === PHASE20_HOTFIX_ANCHOR_SELF ===
-      // anchor: accept either (a) card element itself is <a href>, or
-      // (b) card contains a descendant <a href>. The original `querySelector`
-      // call excludes the element itself, so card-as-anchor sites (e.g., Temu's
-      // <a class="goodsContainer-...">) failed even when the card is clearly
-      // a navigable link. This broader check matches the user-facing intent:
-      // "the card has a way to navigate."
-      const cardIsAnchor = card.tagName === 'A' && card.hasAttribute?.('href');
-      const hasDescendantAnchor = !!card.querySelector?.('a[href]');
-      if (!cardIsAnchor && !hasDescendantAnchor) continue;
-      // === END PHASE20_HOTFIX_ANCHOR_SELF ===
+      // === PHASE_TYPE_D_NAVIGABLE_ANCHOR_EXT ===
+      // Generalized anchor check: <a href> OR role="link" + data-url
+      // (or other data-* URL attribute supported by getRoleLinkHref).
+      // Accepts card-as-anchor self OR descendant <a href> OR
+      // descendant [role="link"] with valid URL.
+      if (!cardHasNavigableAnchor(card)) continue;
+      // === END PHASE_TYPE_D_NAVIGABLE_ANCHOR_EXT ===
 
       validCards.push({ card, dominantImgs: cardDominantImgs });
     }
@@ -2356,10 +2526,10 @@ async function detectTypeDItemMaps(root = document) {
             sibDominantImgs = new Set();
           }
           if (!sibDominantImgs.size) continue;
-          // Anchor presence (self or descendant).
-          const sibIsAnchor = sib.tagName === 'A' && sib.hasAttribute?.('href');
-          const sibHasDescendantAnchor = !!sib.querySelector?.('a[href]');
-          if (!sibIsAnchor && !sibHasDescendantAnchor) continue;
+          // === PHASE_TYPE_D_NAVIGABLE_ANCHOR_EXT ===
+          // Same generalized check for sibling rescue.
+          if (!cardHasNavigableAnchor(sib)) continue;
+          // === END PHASE_TYPE_D_NAVIGABLE_ANCHOR_EXT ===
           inclusiveCards.push({ card: sib, dominantImgs: sibDominantImgs });
         }
       }
@@ -2447,7 +2617,13 @@ async function detectTypeEItemMaps(rejectedImages = []) {
   const rejected = Array.isArray(rejectedImages) ? rejectedImages : [];
 
   for (const { img } of rejected) {
-    if (!img || !isMediaElement(img)) continue;
+    // === PHASE_TYPE_E_DIV_ADMISSION_GATE_A ===
+    // Admit bg-image DIVs (Round 9 PHASE_BG_IMAGE_ADMISSION) into
+    // Type E candidate selection. Without this, a DIV that passes
+    // the bg-image allowlist and falls through Type D would never
+    // become a Type E candidate; the user could not activate it.
+    if (!img || !isMediaCandidateElement(img)) continue;
+    // === END PHASE_TYPE_E_DIV_ADMISSION_GATE_A ===
     // === PHASE27D_HOVER_COMPANIONS (Type E) ===
     // === PHASE_TYPE_E_HOVER_COMPANIONS_SCOPE ===
     // Two-pass hoverCompanions computation:
@@ -3247,9 +3423,14 @@ function buildImageToItem(items) {
       if (!item) continue;
       if (item.evidenceType === EVIDENCE_TYPE_E) {
         const img = item.element;
-        if (img && isMediaElement(img) && !map.has(img)) {
+        // === PHASE_TYPE_E_DIV_ADMISSION_GATE_B ===
+        // Register bg-image DIVs as Type E imageToItem keys. Without
+        // this, even if Gate A admitted a DIV as a candidate, the
+        // dispatch lookup would miss it on hover.
+        if (img && isMediaCandidateElement(img) && !map.has(img)) {
           map.set(img, item);
         }
+        // === END PHASE_TYPE_E_DIV_ADMISSION_GATE_B ===
         // === PHASE_TYPE_E_ANCHOR_REGISTER ===
         // For each Type E item, also register the <img>'s closest
         // <a href> ancestor as an imageToItem key. Mirrors the Type D
@@ -3356,10 +3537,18 @@ function buildImageToItem(items) {
         // anchor semantics differ (whole-feed-unit interaction); Type B
         // continues to rely on seedImages + companion registration.
         if (item.evidenceType === EVIDENCE_TYPE_IMAGE_ANCHOR && seeds) {
+          // === PHASE_TYPE_D_CARD_ANCHOR_REGISTER ===
+          // When the Type D card itself is anchor-like (role="link" +
+          // data-url, with no inner <a href>), register the card
+          // element as an imageToItem key directly.
+          if (isAnchorLike(item.element) && !map.has(item.element)) {
+            map.set(item.element, item);
+          }
+          // === END PHASE_TYPE_D_CARD_ANCHOR_REGISTER ===
           for (const img of seeds) {
             if (!img) continue;
             try {
-              const anchor = img.closest?.('a[href]');
+              const anchor = closestAnchorLike(img);
               if (anchor && !map.has(anchor)) {
                 map.set(anchor, item);
               }
@@ -3455,11 +3644,13 @@ export function findItemByImage(el) {
     // Cost: at most one closest('a[href]') walk per missed mouseover.
     // closest is a plain DOM walk, no getComputedStyle. Layout-safe.
     try {
-      const ancestorAnchor = el.closest?.('a[href]');
+      // === PHASE_FIND_ITEM_CLOSEST_ANCHOR_LIKE ===
+      const ancestorAnchor = closestAnchorLike(el);
       if (ancestorAnchor && ancestorAnchor !== el) {
         const viaAnchor = imageToItem.get(ancestorAnchor);
         if (viaAnchor) return viaAnchor;
       }
+      // === END PHASE_FIND_ITEM_CLOSEST_ANCHOR_LIKE ===
     } catch (e) {
       // defensive: closest can throw on disconnected nodes
     }
@@ -3472,45 +3663,121 @@ export function findItemByImage(el) {
 
 // === PHASE_OVERLAY_ON_IMAGE ===
 // Resolves the overlay element for a Type B / Type D activation.
-// Returns the dominantImg (Case 1, 3), the comparator (Case 2 — anchor or
-// branch container in clipped overflow), or null if no valid overlay
-// element can be determined (no dominantImg, invalid rect, or no
-// matching anchor / sibling subtree anchor in the coreItem's subtree).
-// Callers handle null by hiding the overlay while keeping the
-// activation intact (overlay/clip gated by the null result).
-//
-//   Case 1: <img> fits within (or equals) the anchor on all four edges
-//           → overlay = <img>.
-//
-//   Case 2: <img> extends beyond the anchor in layout, AND a clip-producing
-//           CSS property is present on the path img → anchor/comparator
-//           → overlay = comparator (anchor or branch container).
-//
-//   Case 3: <img> extends beyond the comparator AND no clip applies
-//           → overlay = <img>.
-//
-// Edge comparison uses strict inequality (>= / <=, no tolerance).
+// Returns dominantImg, comparator, or null. Callers hide the overlay
+// when null while keeping activation intact.
+
+// === PHASE_CLIP_AWARE_COMPARATOR_HELPER ===
+// Narrow-scope helpers for Round 11.7 clip-aware comparator selection.
+// Distinct from `hasClipStyle` (which also matches clip-path, overflow:
+// clip, scroll, and contain), per maintainer Round 11.7 decision #4 —
+// only `overflow: hidden` qualifies as a clip ancestor for overlay
+// comparator selection.
+
+/**
+ * Returns true if el has overflow: hidden in any axis (shorthand
+ * `overflow`, or per-axis `overflowX` / `overflowY`). NOT matched:
+ * overflow: clip / scroll / auto, clip-path, contain:paint/strict/content.
+ */
+function hasOverflowHidden(el) {
+  if (!el || el.nodeType !== 1) return false;
+  try {
+    const cs = window.getComputedStyle?.(el);
+    if (!cs) return false;
+    const o = String(cs.overflow || '');
+    const ox = String(cs.overflowX || '');
+    const oy = String(cs.overflowY || '');
+    return o === 'hidden' || ox === 'hidden' || oy === 'hidden';
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Walks from `dominantImg.parentElement` up to and including `anchor`,
+ * returns the first element with `overflow: hidden`. Returns null when
+ * no such element exists on the path. Caller treats null as "anchor
+ * is fallback comparator with no actual clipping" and uses that flag
+ * to preserve image-overflow-without-clip semantics (Old Case 3).
+ */
+function findFirstOverflowHiddenAncestor(dominantImg, anchor) {
+  if (!dominantImg || !anchor) return null;
+  if (dominantImg.nodeType !== 1 || anchor.nodeType !== 1) return null;
+  if (dominantImg === anchor) {
+    return hasOverflowHidden(anchor) ? anchor : null;
+  }
+  if (!anchor.contains?.(dominantImg)) return null;
+  let cur = dominantImg.parentElement;
+  while (cur) {
+    if (hasOverflowHidden(cur)) return cur;
+    if (cur === anchor) break;
+    cur = cur.parentElement;
+  }
+  return null;
+}
+// === END PHASE_CLIP_AWARE_COMPARATOR_HELPER ===
+
+/**
+ * Determines the overlay element for Type B/D activation given the
+ * resolved coreItem, dominantImg, and wrapping anchor.
+ *
+ * Branch A (anchor wraps dominantImg):
+ *   1. Find first overflow:hidden ancestor walking from dominantImg
+ *      up to anchor (inclusive). This is the actual clip boundary
+ *      per CSS spec.
+ *   2. Comparator = clip ancestor (if found) or anchor (fallback).
+ *   3. Compare comparator rect to imgRect via size-based resolution
+ *      (see applyOverlayCaseRule):
+ *      - rects equal → comparator
+ *      - imgRect inside comparator → dominantImg
+ *      - imgRect overflows comparator:
+ *        - if comparator clips → comparator
+ *        - else (anchor fallback, no clip) → dominantImg
+ *
+ * Branch B (no anchor wraps dominantImg):
+ *   - Walk dominantImg ancestors looking for one with a sibling
+ *     containing an anchor-like element. That container substitutes
+ *     for the anchor. Same size-based resolution applies; the
+ *     branch container's overflow:hidden (if any) determines
+ *     isComparatorClipping.
+ *
+ * Returns null when neither branch resolves an overlay element.
+ */
 export function determineTypeDOverlayElement(coreItem, dominantImg, anchor) {
   if (!dominantImg) return null;
   const imgRect = dominantImg.getBoundingClientRect?.();
   if (!imgRect) return null;
   if (imgRect.width <= 0 || imgRect.height <= 0) return null;
 
+  // === PHASE_CLIP_AWARE_COMPARATOR_SELECTION ===
   // Branch A: image-wrapping anchor is present (anchor is an ancestor of img).
-  // Apply the existing Case 1/2/3 rule with anchor as the comparator.
+  // Comparator is the actual clip container (first overflow:hidden ancestor
+  // walking from dominantImg up to anchor inclusive), not necessarily the
+  // anchor itself. Per CSS spec, the visible bounds of the image are
+  // determined by the FIRST clip ancestor; once clipped, further ancestors
+  // only contain the already-clipped image. The clip-aware comparator
+  // ensures size-based resolution operates on the correct rect.
+  //
+  // Fallback: when no overflow:hidden exists on the path, comparator is
+  // the anchor and isComparatorClipping=false. In that case, image-
+  // overflows-anchor returns dominantImg (Old Case 3 preservation —
+  // image is visually painted without clipping).
   if (anchor && anchor.contains?.(dominantImg)) {
-    return applyOverlayCaseRule(coreItem, dominantImg, anchor, imgRect);
+    const clipAncestor = findFirstOverflowHiddenAncestor(dominantImg, anchor);
+    const comparator = clipAncestor || anchor;
+    const isComparatorClipping = clipAncestor !== null;
+    return applyOverlayCaseRule(coreItem, dominantImg, comparator, imgRect, isComparatorClipping);
   }
+  // === END PHASE_CLIP_AWARE_COMPARATOR_SELECTION ===
 
   // === PHASE_OVERLAY_BRANCH_CONTAINER ===
   // No image-wrapping anchor: the Type D anchor lives in a sibling subtree
   // of the image (e.g. <figure> with image and caption-credit anchor as
   // separate children). Find the dominantImg's ancestor whose immediate
-  // parent has a sibling containing an <a href>. That ancestor — the last
-  // common-image-side container before the image and anchor diverge —
-  // substitutes for the anchor in the case rule. The same clip-aware
-  // physics apply: img either fits inside this container (Case 1), or
-  // overflows but is clipped (Case 2), or overflows visibly (Case 3).
+  // parent has a sibling containing an anchor-like element. That ancestor —
+  // the last common-image-side container before the image and anchor diverge —
+  // substitutes for the anchor. Size-based resolution applies via
+  // applyOverlayCaseRule; isComparatorClipping reflects whether `cur`
+  // has overflow:hidden (no clip walk in Branch B per maintainer #13).
   let cur = dominantImg.parentElement || null;
   while (cur && cur !== coreItem) {
     const parent = cur.parentElement;
@@ -3518,23 +3785,20 @@ export function determineTypeDOverlayElement(coreItem, dominantImg, anchor) {
     let matched = false;
     for (const sibling of parent.children) {
       if (sibling === cur) continue;
-      const isAnchorSibling =
-        sibling.tagName === 'A' && sibling.hasAttribute?.('href');
+      // === PHASE_OVERLAY_ANCHOR_LIKE ===
+      const isAnchorSibling = isAnchorLike(sibling)
+        || !!sibling.querySelector?.('a[href]')
+        || Array.from(sibling.querySelectorAll?.('[role="link"]') || [])
+          .some((el) => isAnchorLike(el));
+      // === END PHASE_OVERLAY_ANCHOR_LIKE ===
       if (isAnchorSibling) {
         matched = true;
         break;
       }
-      try {
-        if (sibling.querySelector?.('a[href]')) {
-          matched = true;
-          break;
-        }
-      } catch (e) {
-        // defensive: querySelector can throw on disconnected nodes
-      }
     }
     if (matched) {
-      return applyOverlayCaseRule(coreItem, dominantImg, cur, imgRect);
+      const isComparatorClipping = hasOverflowHidden(cur);
+      return applyOverlayCaseRule(coreItem, dominantImg, cur, imgRect, isComparatorClipping);
     }
     cur = cur.parentElement;
   }
@@ -3542,124 +3806,52 @@ export function determineTypeDOverlayElement(coreItem, dominantImg, anchor) {
   // === END PHASE_OVERLAY_BRANCH_CONTAINER ===
 }
 
-// Shared Case 1/2/3 evaluation: `comparator` may be either the
-// image-wrapping anchor (Branch A) or the branch container (Branch B).
-// Case rules are identical in both cases — the physics of clipping
-// don't care about anchor semantics.
-function applyOverlayCaseRule(coreItem, dominantImg, comparator, imgRect) {
-  const comparatorRect = comparator.getBoundingClientRect?.();
+// === PHASE_OVERLAY_SIZE_BASED_RESOLUTION ===
+// Size-based overlay element resolution (Round 11.7). Replaces the
+// former Case 1 (content-box inclusion) + Round 11.6 geometric guard
+// (border-box inclusion) + Case 2 (clip-path detection) + Case 3
+// (no-clip overflow) stack with a single rect comparison using
+// border-box rects.
+//
+// Decision table (TOL = 1px on each edge):
+//
+//   imgRect ≈ comparatorRect (equal):
+//     → return comparator
+//   imgRect strictly inside comparatorRect (comparator > image):
+//     → return dominantImg
+//   imgRect overflows comparatorRect (comparator < image):
+//     → if isComparatorClipping (comparator has overflow:hidden):
+//       → return comparator (actual clip)
+//     → else (comparator is anchor fallback with no clip):
+//       → return dominantImg (image painted visibly outside; Old
+//         Case 3 preservation per maintainer Round 11.7 decision #9)
+function applyOverlayCaseRule(coreItem, dominantImg, comparator, imgRect, isComparatorClipping) {
+  const comparatorRect = comparator?.getBoundingClientRect?.();
   if (!comparatorRect) return null;
   if (comparatorRect.width <= 0 || comparatorRect.height <= 0) return null;
 
-  // === PHASE_OVERLAY_CASE1_CONTENT_BOX ===
-  // Case 1: img fully within comparator's CONTENT box, within ±1px
-  // tolerance per edge.
-  //
-  // Two coordinated corrections vs the original border-box / zero-tolerance
-  // check:
-  //
-  //   (i)  Compare against the content box (border + padding subtracted),
-  //        not the border box. Comparators with non-zero padding (notably
-  //        YouTube's `a.ytLockupViewModelContentImage` with
-  //        `padding-bottom: 12px`) would otherwise force Case 1 to fail
-  //        when the dominant img exactly fills the visible thumbnail area
-  //        but does not extend into the padding region — leading to a
-  //        spurious Case 2 result (overlay = comparator) on every such
-  //        card.
-  //
-  //   (ii) Allow ±1px tolerance per edge to absorb sub-pixel fractional
-  //        rect drift (DPR scaling, fractional aspect-ratio layout).
-  //        Empirically observed at 0.0039px on YouTube; 1px is generous
-  //        enough to never reject visually identical layouts but tight
-  //        enough that an img genuinely overflowing the content area by
-  //        a meaningful amount still falls through to the clip check.
-  //
-  // Both corrections push the failure mode in the same direction: more
-  // permissive Case 1 → fewer spurious Case 2 hits. They do NOT change
-  // Case 2 or Case 3 semantics.
-  const CASE1_TOLERANCE_PX = 1;
-  const contentRect = getComparatorContentRect(comparator, comparatorRect);
-  if (
-    imgRect.left   >= contentRect.left   - CASE1_TOLERANCE_PX &&
-    imgRect.top    >= contentRect.top    - CASE1_TOLERANCE_PX &&
-    imgRect.right  <= contentRect.right  + CASE1_TOLERANCE_PX &&
-    imgRect.bottom <= contentRect.bottom + CASE1_TOLERANCE_PX
-  ) {
-    return dominantImg;
-  }
-  // === END PHASE_OVERLAY_CASE1_CONTENT_BOX ===
+  const OVERLAY_SIZE_TOLERANCE_PX = 1;
 
-  // img > comparator in layout. Check whether the overflow is actually
-  // clipped visually by any element on the img → comparator ancestor chain.
-  if (isImgClippedAlongAnchorPath(dominantImg, comparator)) {
-    // Case 2: clip restricts visible image area to within comparator.
+  const equal =
+    Math.abs(imgRect.left - comparatorRect.left) <= OVERLAY_SIZE_TOLERANCE_PX &&
+    Math.abs(imgRect.top - comparatorRect.top) <= OVERLAY_SIZE_TOLERANCE_PX &&
+    Math.abs(imgRect.right - comparatorRect.right) <= OVERLAY_SIZE_TOLERANCE_PX &&
+    Math.abs(imgRect.bottom - comparatorRect.bottom) <= OVERLAY_SIZE_TOLERANCE_PX;
+  if (equal) return comparator;
+
+  const inside =
+    imgRect.left >= comparatorRect.left - OVERLAY_SIZE_TOLERANCE_PX &&
+    imgRect.top >= comparatorRect.top - OVERLAY_SIZE_TOLERANCE_PX &&
+    imgRect.right <= comparatorRect.right + OVERLAY_SIZE_TOLERANCE_PX &&
+    imgRect.bottom <= comparatorRect.bottom + OVERLAY_SIZE_TOLERANCE_PX;
+  if (inside) return dominantImg;
+
+  if (isComparatorClipping) {
     return comparator;
   }
-
-  // Case 3: no clip; img genuinely paints outside comparator's box.
   return dominantImg;
 }
-
-// === PHASE_OVERLAY_CASE1_CONTENT_BOX ===
-// Returns a DOMRect-like object representing comparator's content box —
-// its border-box rect with borders and padding subtracted on each edge.
-// Used by applyOverlayCaseRule's Case 1 comparison so that comparators
-// with non-zero padding (e.g. YouTube's `a.ytLockupViewModelContentImage`
-// with `padding-bottom: 12px`) do not falsely fail Case 1 when the
-// dominant img exactly fills the comparator's content area but stops
-// short of the padding region. Without this correction, Case 1's strict
-// `imgRect.bottom <= comparatorRect.bottom` rejects the img by the full
-// padding amount, falls through to Case 2, and (if clip is present on
-// the img→comparator path) returns the comparator — producing an
-// overlay that includes the empty padding strip below the thumbnail.
-//
-// Falls back to the raw border-box rect when getComputedStyle is
-// unavailable or any parsed value is non-finite (defensive: never
-// degrade the comparison if style read fails).
-function getComparatorContentRect(comparator, borderBoxRect) {
-  try {
-    const cs = window.getComputedStyle?.(comparator);
-    if (!cs) return borderBoxRect;
-    const pl = parseFloat(cs.paddingLeft) || 0;
-    const pt = parseFloat(cs.paddingTop) || 0;
-    const pr = parseFloat(cs.paddingRight) || 0;
-    const pb = parseFloat(cs.paddingBottom) || 0;
-    const bl = parseFloat(cs.borderLeftWidth) || 0;
-    const bt = parseFloat(cs.borderTopWidth) || 0;
-    const br = parseFloat(cs.borderRightWidth) || 0;
-    const bb = parseFloat(cs.borderBottomWidth) || 0;
-    return {
-      left: borderBoxRect.left + bl + pl,
-      top: borderBoxRect.top + bt + pt,
-      right: borderBoxRect.right - br - pr,
-      bottom: borderBoxRect.bottom - bb - pb,
-    };
-  } catch (e) {
-    return borderBoxRect;
-  }
-}
-// === END PHASE_OVERLAY_CASE1_CONTENT_BOX ===
-
-// Walk from img upward through its ancestor chain. Returns true if any
-// element on the path up to and including `anchor` carries a clip-producing
-// CSS property. Stops at `anchor` (inclusive). If `anchor` is not reached
-// (e.g. disconnected, or anchor is not an ancestor of img), the walk
-// terminates at the root and returns whatever was found en route.
-function isImgClippedAlongAnchorPath(img, anchor) {
-  // Start at img.parentElement, not img itself. overflow on a replaced
-  // element (<img>, <video>, etc.) controls its own raster content within
-  // its box — it doesn't constrain the box's position relative to an
-  // ancestor. Modern Chrome sets overflow: clip on <img> by default when
-  // aspect-ratio is present, which would false-positive every Type D
-  // image otherwise.
-  let cur = img?.parentElement || null;
-  while (cur) {
-    if (hasClipStyle(cur)) return true;
-    if (cur === anchor) break;
-    cur = cur.parentElement;
-  }
-  return false;
-}
+// === END PHASE_OVERLAY_SIZE_BASED_RESOLUTION ===
 
 // CSS-level clip detection. Returns true if the element introduces any
 // clip-producing rule:
@@ -3713,8 +3905,7 @@ function hasClipStyle(el) {
 //
 // Start at parentElement, not mediaEl itself: overflow on a replaced
 // element (<video>/<img>) clips its own raster content, not the box's
-// extent relative to ancestors (same rationale as
-// isImgClippedAlongAnchorPath).
+// extent relative to ancestors (same rationale as overlay clip walks).
 //
 // @param {Element} mediaEl   the dominant media element (Type E coreItem)
 // @param {Element|null} stopAncestor  walk stops here (inclusive check);

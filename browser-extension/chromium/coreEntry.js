@@ -33,6 +33,8 @@ import {
   resolveAbsoluteImageUrl,
   extractVideoMediaInfo,
   resolveClipImageUrl,
+  closestAnchorLike,
+  getNavigableAnchorUrl,
 } from './dataExtractor.js';
 import {
   getKCShadowRoot,
@@ -45,6 +47,7 @@ import {
   findDominantImagesInElement,
   findHoverCompanions,
   isMediaElement,
+  isMediaCandidateElement,
   // === PHASE_TYPE_E_CLIP_BOUNDARY ===
   findClipBoundaryForMedia,
   // === END PHASE_TYPE_E_CLIP_BOUNDARY ===
@@ -464,13 +467,13 @@ function refreshCoreItemMetadata(coreItem) {
       }
       let typeEActiveUrl = '';
       try {
-        const wrappingAnchor = coreItem?.closest?.('a[href]') || null;
-        if (wrappingAnchor) {
-          const resolved = resolveAnchorUrl(wrappingAnchor);
-          if (typeof resolved === 'string' && resolved.length > 0) {
-            typeEActiveUrl = resolved;
-          }
+        // === PHASE_TYPE_E_ANCHOR_LIKE ===
+        const wrappingAnchor = closestAnchorLike(coreItem);
+        const wrappingUrl = wrappingAnchor ? getNavigableAnchorUrl(wrappingAnchor) : '';
+        if (wrappingUrl) {
+          typeEActiveUrl = wrappingUrl;
         }
+        // === END PHASE_TYPE_E_ANCHOR_LIKE ===
       } catch (e) {
         // defensive
       }
@@ -556,7 +559,15 @@ function refreshCoreItemMetadata(coreItem) {
         ensureClusterCacheFromState();
 
         const newDominantImg = newSeedImages.values().next().value || null;
-        const newAnchor = newDominantImg?.closest?.('a') || null;
+        // === PHASE_OVERLAY_ANCHOR_LIKE_RESOLUTION ===
+        // Round 11 supplemental: refresh re-eval anchor must use
+        // closestAnchorLike to accept role="link" + data-* URL elements
+        // (Trip-like cards without <a href>). Without this, refresh
+        // re-eval rebinds anchor to null and forces Branch B in
+        // determineTypeDOverlayElement, which cannot identify the
+        // anchor-like coreItem as a sibling and returns null.
+        const newAnchor = closestAnchorLike(newDominantImg);
+        // === END PHASE_OVERLAY_ANCHOR_LIKE_RESOLUTION ===
 
         const newOverlay = newDominantImg
           ? determineTypeDOverlayElement(coreItem, newDominantImg, newAnchor)
@@ -1084,29 +1095,29 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         // defensive
       }
     }
-    // === PHASE_TYPE_E_ANCHOR_URL ===
-    // Type E activeHoverUrl: prefer the image-wrapping <a href>'s resolved
-    // URL when one exists and resolveAnchorUrl qualifies it as a meaningful
-    // navigation URL. Fall back to window.location.href otherwise (no
-    // wrapping anchor, no href, or anchor's URL filtered out as empty /
-    // fragment / javascript: / internal redirect / same-document).
+    // === PHASE_TYPE_E_SELF_NAVIGABLE ===
+    // Type E coreItem may be a single element that is BOTH visual content
+    // (bg-image DIV) AND anchorLike (role="link" + data-url). E.g., a
+    // Trip-like card that fell through to Type E. closestAnchorLike(coreItem)
+    // returns coreItem itself when anchorLike. Also handles conventional
+    // wrapping-anchor cases (ancestor role="link" or <a href>).
+    // === PHASE_TYPE_E_ANCHOR_LIKE ===
     let typeEActiveUrl = '';
     try {
-      const wrappingAnchor = coreItem?.closest?.('a[href]') || null;
-      if (wrappingAnchor) {
-        const resolved = resolveAnchorUrl(wrappingAnchor);
-        if (typeof resolved === 'string' && resolved.length > 0) {
-          typeEActiveUrl = resolved;
-        }
+      const wrappingAnchor = closestAnchorLike(coreItem);
+      const wrappingUrl = wrappingAnchor ? getNavigableAnchorUrl(wrappingAnchor) : '';
+      if (wrappingUrl) {
+        typeEActiveUrl = wrappingUrl;
       }
     } catch (e) {
       // defensive: closest can throw on disconnected nodes
     }
+    // === END PHASE_TYPE_E_ANCHOR_LIKE ===
     if (!typeEActiveUrl) {
       typeEActiveUrl = String(window.location.href || '');
     }
     meta = { ...meta, activeHoverUrl: typeEActiveUrl };
-    // === END PHASE_TYPE_E_ANCHOR_URL ===
+    // === END PHASE_TYPE_E_SELF_NAVIGABLE ===
   }
   // === END PHASE27F_TYPE_E_OVERRIDES ===
 
@@ -1198,7 +1209,13 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     let anchor = null;
     let dominantImg = null;
     try {
-      anchor = target?.closest?.('a') || null;
+      // === PHASE_OVERLAY_ANCHOR_LIKE_RESOLUTION ===
+      // Round 11 supplemental: primary anchor lookup from hover target
+      // must accept role="link" + data-* URL ancestors so Trip-like
+      // cards (role="link" on the card root, no inner <a href>) bind
+      // anchor = card and reach determineTypeDOverlayElement Branch A.
+      anchor = closestAnchorLike(target);
+      // === END PHASE_OVERLAY_ANCHOR_LIKE_RESOLUTION ===
     } catch (e) {
       anchor = null;
     }
@@ -1244,7 +1261,13 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
         (!anchor || !anchor.contains?.(dominantImg))
       ) {
         try {
-          anchor = dominantImg.closest?.('a') || null;
+          // === PHASE_OVERLAY_ANCHOR_LIKE_RESOLUTION ===
+          // Round 11 supplemental: rebind anchor via closestAnchorLike
+          // so anchor-less Type D dominant elements (e.g., bg-image
+          // descendant of a role="link" card) resolve to the card as
+          // the anchor for overlay Branch A.
+          anchor = closestAnchorLike(dominantImg);
+          // === END PHASE_OVERLAY_ANCHOR_LIKE_RESOLUTION ===
         } catch (e) {
           anchor = null;
         }
@@ -1281,7 +1304,9 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     // Never worse than before.
     let typeEStopAncestor = null;
     try {
-      typeEStopAncestor = coreItem.closest?.('a[href]') || null;
+      // === PHASE_TYPE_E_ANCHOR_LIKE ===
+      typeEStopAncestor = closestAnchorLike(coreItem) || null;
+      // === END PHASE_TYPE_E_ANCHOR_LIKE ===
     } catch (e) {
       typeEStopAncestor = null;
     }
@@ -2309,7 +2334,14 @@ function pickDominantImageElement(rootElement) {
     // pickDominantImageElement → videoElementToBlob path — which is
     // where pickDominantImageElement(video) = null surfaced as
     // silent clipboard failure.
-    if (isMediaElement(rootElement)) return rootElement;
+    // === PHASE_TYPE_E_DIV_ADMISSION_GATE_C ===
+    // pickDominantImageElement self-return: Type E's element IS the
+    // media node. Extend to admit bg-image DIVs whose admission was
+    // approved by Round 9. Without this, a DIV coreItem would fall
+    // through to findDominantImagesInElement which only searches
+    // descendants — empty for a leaf DIV.
+    if (isMediaCandidateElement(rootElement)) return rootElement;
+    // === END PHASE_TYPE_E_DIV_ADMISSION_GATE_C ===
     // === END PHASE_TYPE_E_DOMINANT_SELF ===
     // === PHASE_PICK_DOMINANT_TYPE_AWARE ===
     // Look up the itemMap entry for this root to determine evidence

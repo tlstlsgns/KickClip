@@ -4,7 +4,10 @@
  */
 
 import { getOriginalUrl, resolveCached, cleanTrackingParams, isNavigationUrl, getUrlIntent } from './urlResolver.js';
-import { findDominantImagesInElement } from './itemDetector.js';
+import {
+  extractInlineBackgroundImageUrl,
+  findDominantImagesInElement,
+} from './itemDetector.js';
 
 let lastExtractionLog = '';
 let extractionLogShortcutInstalled = false;
@@ -1422,12 +1425,21 @@ export function resolveClipImageUrl(coreItem, dominantImg) {
       } catch (_) { /* fall through */ }
     }
 
-    // 5. Final fallback: dominantImg.src / currentSrc / src
+    // 5. Background-image DIV fallback: dominant element with no src
+    //    but inline background-image URL. Reuses the same admission
+    //    helper from itemDetector to guarantee admit-time and
+    //    extract-time URLs agree (single source of truth, no drift).
+    // === PHASE_BG_IMAGE_CLIP_FALLBACK ===
     if (dominantImg) {
-      return resolveAbsoluteImageUrl(
-        dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src || ''
-      );
+      const srcAttr = dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src || '';
+      if (srcAttr) {
+        return resolveAbsoluteImageUrl(srcAttr);
+      }
+      // No src — try inline background-image (Type B/D bg-DIV dominant).
+      const bgUrl = extractInlineBackgroundImageUrl(dominantImg);
+      if (bgUrl) return bgUrl;
     }
+    // === END PHASE_BG_IMAGE_CLIP_FALLBACK ===
     return '';
   } catch (_) {
     return '';
@@ -1511,6 +1523,46 @@ export function extractImageFromCoreItem(coreItem) {
       }
     }
     // === END PHASE27F_TYPE_E_IMG_SHORTCUT ===
+
+    // === PHASE_TYPE_E_DIV_SHORTCUT ===
+    // When the coreItem is a non-IMG/non-VIDEO element with an
+    // inline background-image URL (Round 9 admission), produce the
+    // clip image from that URL. Parallels the IMG shortcut above.
+    //
+    // Width/height precedence:
+    //   1. Layout rect (getBoundingClientRect) — current paint size.
+    //   2. Falls back to 0 if no rect (defensive; element with no
+    //      layout footprint shouldn't have reached Type E candidate
+    //      selection per the existing visibility filters).
+    //
+    // URL: resolveClipImageUrl handles the bg-image fallback via
+    // PHASE_BG_IMAGE_CLIP_FALLBACK; passing coreItem as both
+    // arguments ensures the helper finds the DIV's bg URL.
+    if (
+      coreItem &&
+      coreItem.nodeType === 1 &&
+      String(coreItem.tagName || '').toUpperCase() !== 'IMG' &&
+      String(coreItem.tagName || '').toUpperCase() !== 'VIDEO'
+    ) {
+      const bgUrl = extractInlineBackgroundImageUrl(coreItem);
+      if (bgUrl) {
+        const src = resolveClipImageUrl(coreItem, coreItem);
+        if (src) {
+          const rect = coreItem.getBoundingClientRect?.();
+          const width = Math.max(0, Number(rect?.width) || 0);
+          const height = Math.max(0, Number(rect?.height) || 0);
+          return {
+            image: {
+              url: src,
+              width: Math.round(width),
+              height: Math.round(height),
+            },
+            usedCustomLogic: false,
+          };
+        }
+      }
+    }
+    // === END PHASE_TYPE_E_DIV_SHORTCUT ===
 
     // === PHASE_VIDEO_CLIP_TYPE_E ===
     // Type E shortcut for <video>: parallel to the IMG branch above.
@@ -2099,6 +2151,76 @@ function resolveRoleLinkUrl(el) {
     return null;
   }
 }
+
+// === PHASE_ANCHOR_LIKE_HELPERS ===
+// Helpers for generalized anchor detection (Round 11). Extend the
+// notion of "anchor" beyond <a href> to include role="link"
+// elements with a valid http(s) URL stored in a data-* attribute
+// (data-url, data-href, data-link, data-href-url — already
+// supported by getRoleLinkHref). Used in Type D detection,
+// imageToItem registration, findItemByImage dispatch, overlay
+// scanning, and Type E URL extraction.
+//
+// Type B is intentionally NOT updated to use these helpers — Type B
+// uses platform-specific post URL extraction (Instagram shortcode,
+// Reddit post-id, X tweet status URL), and those code paths remain
+// authoritative for Type B.
+
+/** Returns true if el is role="link" with a resolvable URL. */
+export function hasValidRoleLinkUrl(el) {
+  return !!resolveRoleLinkUrl(el);
+}
+
+/**
+ * Returns true if el is anchor-like:
+ *   - <a href>, OR
+ *   - role="link" with valid data-* URL.
+ */
+export function isAnchorLike(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (String(el.tagName || '').toUpperCase() === 'A' && el.hasAttribute?.('href')) {
+    return true;
+  }
+  if (el.getAttribute?.('role') === 'link' && hasValidRoleLinkUrl(el)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns true if card or any descendant is anchor-like.
+ */
+export function cardHasNavigableAnchor(card) {
+  if (!card || card.nodeType !== 1) return false;
+  if (isAnchorLike(card)) return true;
+  if (card.querySelector?.('a[href]')) return true;
+  const roleLinks = card.querySelectorAll?.('[role="link"]') || [];
+  for (const el of roleLinks) {
+    if (isAnchorLike(el)) return true;
+  }
+  return false;
+}
+
+/**
+ * Walks el upward (INCLUDING el itself) testing isAnchorLike.
+ */
+export function closestAnchorLike(el, root = document.body) {
+  let cur = el;
+  while (cur && cur !== root) {
+    if (isAnchorLike(cur)) return cur;
+    cur = cur.parentElement;
+  }
+  if (cur && isAnchorLike(cur)) return cur;
+  return null;
+}
+
+/**
+ * Returns the navigable URL for el, or ''.
+ */
+export function getNavigableAnchorUrl(el) {
+  return resolveAnchorUrl(el) || resolveRoleLinkUrl(el) || '';
+}
+// === END PHASE_ANCHOR_LIKE_HELPERS ===
 
 export function isValidAnchor(anchor) {
   try {
