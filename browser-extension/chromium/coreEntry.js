@@ -1687,7 +1687,14 @@ function mountObservers() {
 // preview-video pattern does not apply.
 let _mountedDomDrivenRedispatch = false;
 let _domDrivenRedispatchDebounceTimer = null;
-const KC_DOM_DRIVEN_REDISPATCH_DEBOUNCE_MS = 50;
+// === PHASE_PERF_REDISPATCH_DEBOUNCE_RAISE ===
+// Raised from 50ms to 100ms to halve the worst-case fire rate
+// (and thus elementFromPoint forced-layout cost) on high-mutation
+// pages such as streaming platforms. 100ms is well below user
+// perception threshold for hover transitions while substantially
+// reducing main-thread contention with video decoder/compositor.
+const KC_DOM_DRIVEN_REDISPATCH_DEBOUNCE_MS = 100;
+// === END PHASE_PERF_REDISPATCH_DEBOUNCE_RAISE ===
 
 function mountDomDrivenRedispatch() {
   if (_mountedDomDrivenRedispatch) return;
@@ -1745,11 +1752,20 @@ function mountDomDrivenRedispatch() {
     schedule();
   });
 
+  // === PHASE_PERF_REDISPATCH_CLASS_DROP ===
+  // 'class' removed from attributeFilter to eliminate the most
+  // frequent attribute-mutation source on streaming/chat UIs
+  // (class toggles for hover, active, animation states). The
+  // observer still catches meaningful element-under-pointer
+  // changes via childList + src + style; pure-class state
+  // toggles are accepted as missed signal in exchange for
+  // significantly lower mutation traffic on high-churn pages.
+  // === END PHASE_PERF_REDISPATCH_CLASS_DROP ===
   obs.observe(targetNode, {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['src', 'style', 'class'],
+    attributeFilter: ['src', 'style'],
   });
 }
 // === END PHASE_DOM_DRIVEN_REDISPATCH ===
