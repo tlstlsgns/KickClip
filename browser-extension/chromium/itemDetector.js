@@ -3729,10 +3729,15 @@ export function findItemByImage(el) {
 
 // === PHASE_CLIP_AWARE_COMPARATOR_HELPER ===
 // Narrow-scope helpers for Round 11.7 clip-aware comparator selection.
-// Distinct from `hasClipStyle` (which also matches clip-path, overflow:
-// clip, scroll, and contain), per maintainer Round 11.7 decision #4 —
-// only `overflow: hidden` qualifies as a clip ancestor for overlay
-// comparator selection.
+// Only `overflow: hidden` qualifies as a clip ancestor for overlay
+// comparator selection (per maintainer Round 11.7 decision #4).
+
+// === PHASE_TYPE_E_OVERLAY_ALWAYS_CLIP_AWARE ===
+// Shared overlay rect tolerance (was local to applyOverlayCaseRule). Used by
+// applyOverlayCaseRule (size resolution) and highestConcentricAncestor
+// (center-match), per maintainer "unify tolerance".
+const OVERLAY_SIZE_TOLERANCE_PX = 1;
+// === END PHASE_TYPE_E_OVERLAY_ALWAYS_CLIP_AWARE ===
 
 /**
  * Returns true if el has overflow: hidden in any axis (shorthand
@@ -3849,8 +3854,6 @@ function applyOverlayCaseRule(coreItem, dominantImg, comparator, imgRect, isComp
   if (!comparatorRect) return null;
   if (comparatorRect.width <= 0 || comparatorRect.height <= 0) return null;
 
-  const OVERLAY_SIZE_TOLERANCE_PX = 1;
-
   const equal =
     Math.abs(imgRect.left - comparatorRect.left) <= OVERLAY_SIZE_TOLERANCE_PX &&
     Math.abs(imgRect.top - comparatorRect.top) <= OVERLAY_SIZE_TOLERANCE_PX &&
@@ -3872,95 +3875,67 @@ function applyOverlayCaseRule(coreItem, dominantImg, comparator, imgRect, isComp
 }
 // === END PHASE_OVERLAY_SIZE_BASED_RESOLUTION ===
 
-// CSS-level clip detection. Returns true if the element introduces any
-// clip-producing rule:
-//   - overflow-x or overflow-y is not 'visible' (hidden, clip, scroll, auto)
-//   - clip-path is not 'none'
-//   - contain includes 'paint', 'strict', or 'content' (which imply paint
-//     containment, which clips overflow).
-// Other clip mechanisms (mask-image, etc.) are intentionally out of scope —
-// add them here if real-world cases emerge that need them.
-function hasClipStyle(el) {
-  if (!el || el.nodeType !== 1) return false;
-  try {
-    const cs = window.getComputedStyle?.(el);
-    if (!cs) return false;
-    if (cs.overflowX && cs.overflowX !== 'visible') return true;
-    if (cs.overflowY && cs.overflowY !== 'visible') return true;
-    if (cs.clipPath && cs.clipPath !== 'none') return true;
-    const contain = String(cs.contain || '');
-    if (/\b(paint|strict|content)\b/.test(contain)) return true;
-    return false;
-  } catch (e) {
-    return false;
-  }
-}
-// === END PHASE_OVERLAY_ON_IMAGE ===
+// === PHASE_TYPE_E_OVERLAY_ALWAYS_CLIP_AWARE ===
+// Type E overlay resolution. coreItem IS the dominant media (<img>/<video>);
+// there is no separate card. Applies the SAME clip-aware rule as Type D
+// (determineTypeDOverlayElement / PHASE_OVERLAY_ALWAYS_CLIP_AWARE),
+// independent of any wrapping anchor: first overflow:hidden ancestor ->
+// applyOverlayCaseRule; else the media itself. Difference from Type D: the
+// upward walk is bounded by the highest CONCENTRIC ancestor (center match on
+// both axes within OVERLAY_SIZE_TOLERANCE_PX) instead of the card, so
+// off-center layout containers are excluded. Replaces the old anchor-bounded
+// clip walk and closestAnchorLike stopAncestor.
 
-// === PHASE_TYPE_E_CLIP_BOUNDARY ===
-// Finds the clip boundary for a dominant-media element (Type E).
-//
-// Type E items (e.g. YouTube preview <video>) are themselves the
-// dominant media: coreItem === the <video>/<img>. The media's layout
-// box is often LARGER than its visible region — YouTube uses
-// object-fit: cover with a video sized beyond the player and an
-// intermediate overflow:hidden ancestor clipping it (the video may sit
-// at top:-29px inside a 302px-tall player, so ~57px is clipped).
-//
-// This cannot be solved with the anchor-comparator rule
-// (applyOverlayCaseRule), because:
-//   (1) the wrapping <a href> (e.g. a#media-container-link) can have
-//       height:0 — its children are position:absolute — so it is
-//       rejected as a zero-size comparator; and
-//   (2) the anchor is not the real clip boundary; the
-//       overflow:hidden player wrapper between video and anchor is.
-//
-// Strategy: walk from mediaEl.parentElement upward toward stopAncestor.
-// Return the FIRST ancestor that BOTH has a clip style (hasClipStyle —
-// overflow/clip-path/contain) AND whose rect actually cuts the media
-// rect on some edge (ancestor smaller than media). That element's box
-// is the visible region. Return null if none qualifies (caller keeps
-// the media element as the overlay — never worse than before).
-//
-// Start at parentElement, not mediaEl itself: overflow on a replaced
-// element (<video>/<img>) clips its own raster content, not the box's
-// extent relative to ancestors (same rationale as overlay clip walks).
-//
-// @param {Element} mediaEl   the dominant media element (Type E coreItem)
-// @param {Element|null} stopAncestor  walk stops here (inclusive check);
-//                                     typically the wrapping <a href>
-// @returns {Element|null} the clip boundary element, or null
-export function findClipBoundaryForMedia(mediaEl, stopAncestor) {
-  try {
-    const mr = mediaEl?.getBoundingClientRect?.();
-    if (!mr || mr.width <= 0 || mr.height <= 0) return null;
-
-    const CUT_TOLERANCE_PX = 1;
-    let cur = mediaEl.parentElement || null;
-    let depth = 0;
-    while (cur && depth < 30) {
-      if (hasClipStyle(cur)) {
-        const cr = cur.getBoundingClientRect?.();
-        if (cr && cr.width > 0 && cr.height > 0) {
-          const cutsTop = cr.top > mr.top + CUT_TOLERANCE_PX;
-          const cutsBottom = cr.bottom < mr.bottom - CUT_TOLERANCE_PX;
-          const cutsLeft = cr.left > mr.left + CUT_TOLERANCE_PX;
-          const cutsRight = cr.right < mr.right - CUT_TOLERANCE_PX;
-          if (cutsTop || cutsBottom || cutsLeft || cutsRight) {
-            return cur;
-          }
-        }
-      }
-      if (cur === stopAncestor) break;
-      cur = cur.parentElement;
-      depth++;
+/**
+ * Highest ancestor concentric with mediaEl (rect-center match on both axes
+ * within OVERLAY_SIZE_TOLERANCE_PX), walking up from mediaEl.parentElement.
+ * Stops at the first ancestor whose center diverges, or whose box is absent
+ * (e.g. display:contents -> zero rect). Returns the highest concentric
+ * ancestor (inclusive), or null if even the immediate parent is not
+ * concentric.
+ */
+function highestConcentricAncestor(mediaEl, mediaRect) {
+  const mcx = mediaRect.left + mediaRect.width / 2;
+  const mcy = mediaRect.top + mediaRect.height / 2;
+  let result = null;
+  let cur = mediaEl.parentElement || null;
+  let depth = 0;
+  while (cur && depth < 30) {
+    const cr = cur.getBoundingClientRect?.();
+    if (!cr || cr.width <= 0 || cr.height <= 0) break; // no box (display:contents) / degenerate
+    const ccx = cr.left + cr.width / 2;
+    const ccy = cr.top + cr.height / 2;
+    if (Math.abs(ccx - mcx) > OVERLAY_SIZE_TOLERANCE_PX ||
+        Math.abs(ccy - mcy) > OVERLAY_SIZE_TOLERANCE_PX) {
+      break; // center diverged - this and higher ancestors are not concentric
     }
-    return null;
-  } catch (e) {
-    return null;
+    result = cur; // concentric -> highest-so-far (inclusive)
+    cur = cur.parentElement;
+    depth++;
   }
+  return result;
 }
-// === END PHASE_TYPE_E_CLIP_BOUNDARY ===
+
+/**
+ * Overlay element for a Type E item (the dominant media). Mirrors
+ * determineTypeDOverlayElement, bounded by the highest concentric ancestor
+ * instead of a card. Returns the media element when no overflow:hidden
+ * ancestor exists within that bound, or when no concentric ancestor exists.
+ */
+export function determineTypeEOverlayElement(mediaEl) {
+  if (!mediaEl || mediaEl.nodeType !== 1) return null;
+  const mediaRect = mediaEl.getBoundingClientRect?.();
+  if (!mediaRect || mediaRect.width <= 0 || mediaRect.height <= 0) return null;
+  const bound = highestConcentricAncestor(mediaEl, mediaRect);
+  if (!bound) return mediaEl; // no concentric ancestor -> overlay = media itself
+  const clipAncestor = findFirstOverflowHiddenAncestor(mediaEl, bound);
+  return clipAncestor
+    ? applyOverlayCaseRule(mediaEl, mediaEl, clipAncestor, mediaRect, true)
+    : mediaEl;
+}
+// === END PHASE_TYPE_E_OVERLAY_ALWAYS_CLIP_AWARE ===
+
+// === END PHASE_OVERLAY_ON_IMAGE ===
 
 // Aliases
 export const findItemsOnPage = detectItemMaps;

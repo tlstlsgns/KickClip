@@ -48,9 +48,9 @@ import {
   findHoverCompanions,
   isMediaElement,
   isMediaCandidateElement,
-  // === PHASE_TYPE_E_CLIP_BOUNDARY ===
-  findClipBoundaryForMedia,
-  // === END PHASE_TYPE_E_CLIP_BOUNDARY ===
+  // === PHASE_TYPE_E_OVERLAY_ALWAYS_CLIP_AWARE ===
+  determineTypeEOverlayElement,
+  // === END PHASE_TYPE_E_OVERLAY_ALWAYS_CLIP_AWARE ===
 } from './itemDetector.js';
 import { getShortcut, onShortcutChange, matchesShortcut, formatShortcut } from './shortcutStore.js';
 
@@ -1294,47 +1294,15 @@ async function updateCoreSelectionFromTarget(target, clientX = null, clientY = n
     }
     // === END PHASE_OVERLAY_ANCHOR_REBIND ===
     overlayElement = determineTypeDOverlayElement(coreItem, dominantImg, anchor);
-  // === PHASE_TYPE_E_OVERLAY_CASE_RULE ===
+  // === PHASE_TYPE_E_OVERLAY_ALWAYS_CLIP_AWARE ===
   } else if (evidenceType === 'E') {
-    // Type E: coreItem IS the dominant media (<video> / <img>). Its
-    // layout box is often LARGER than the visible region — YouTube's
-    // preview <video> uses object-fit: cover with the video sized beyond
-    // the player and an intermediate overflow:hidden ancestor clipping
-    // it (e.g. video at top:-29px in a 302px-tall player → ~57px
-    // clipped). Drawing the overlay on the full <video> rect is wrong.
-    //
-    // The anchor-comparator rule (determineTypeDOverlayElement) does NOT
-    // work here: the wrapping <a#media-container-link> has height:0 (its
-    // children are position:absolute), so applyOverlayCaseRule rejects
-    // it as a zero-size comparator; and the anchor is not the real clip
-    // boundary anyway — the overflow:hidden player wrapper between the
-    // video and the anchor is.
-    //
-    // findClipBoundaryForMedia walks from the media up to the wrapping
-    // anchor and returns the first overflow:hidden (etc.) ancestor whose
-    // rect actually cuts the media box — i.e. the visible region. That
-    // element becomes the overlay.
-    //
-    // stopAncestor: the media's own closest <a href> — the same wrapping
-    // anchor whose href is the clip save URL. Bounds the upward walk.
-    //
-    // Fallback: if no clip boundary is found (or no wrapping anchor),
-    // keep overlayElement = coreItem (overlay on the full media element).
-    // Never worse than before.
-    let typeEStopAncestor = null;
-    try {
-      // === PHASE_TYPE_E_ANCHOR_LIKE ===
-      typeEStopAncestor = closestAnchorLike(coreItem) || null;
-      // === END PHASE_TYPE_E_ANCHOR_LIKE ===
-    } catch (e) {
-      typeEStopAncestor = null;
-    }
-    const clipBoundary = findClipBoundaryForMedia(coreItem, typeEStopAncestor);
-    if (clipBoundary) {
-      overlayElement = clipBoundary;
-    }
-    // clipBoundary === null → leave overlayElement = coreItem (fallback)
-  // === END PHASE_TYPE_E_OVERLAY_CASE_RULE ===
+    // Type E: coreItem IS the dominant media (<img>/<video>). Overlay
+    // resolution applies the same clip-aware rule as Type D, independent of
+    // any wrapping anchor, bounded by the highest concentric ancestor (see
+    // determineTypeEOverlayElement in itemDetector.js). Fallback: the media
+    // element itself.
+    overlayElement = determineTypeEOverlayElement(coreItem) || coreItem;
+  // === END PHASE_TYPE_E_OVERLAY_ALWAYS_CLIP_AWARE ===
   }
   // === PHASE_OVERLAY_HOVER_GATE ===
   // Lifecycle decoupling: activeCoreItem stays alive regardless of
