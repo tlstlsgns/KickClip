@@ -376,24 +376,90 @@ export function hideCoreStatusBadge() {
   } catch (e) {}
 }
 
-export function positionCoreStatusBadge(clientX, clientY) {
+// === PHASE_BADGE_ANCHOR_OVERLAY ===
+// Bottom (viewport y) of the lowest TOP-ANCHORED fixed/sticky page chrome
+// (e.g. a site header, possibly multi-row) covering column `x`, or 0 if none.
+// Relies on our overlay/host/badge being pointer-events:none, so
+// elementFromPoint returns page elements. Jumps from each chrome occluder's
+// bottom (deterministic; clears tall/multi-row headers in a few hops).
+// Occluder counts as chrome only if it (or an ancestor within 6 hops) is
+// position:fixed|sticky AND is contiguous from the top — static content above
+// the media, and non-top fixed elements (e.g. a right sidebar), are excluded.
+function _topChromeBottomAt(x, coreItem) {
+  const PAD = 8;
+  const MAX_JUMPS = 8;
+  const hostId = KC_SHADOW_HOST_ID;
+  const isFixedOrSticky = (el) => {
+    let cur = el, hops = 0;
+    while (cur && cur.nodeType === 1 && hops < 6) {
+      let pos = '';
+      try { pos = getComputedStyle(cur).position; } catch (_) {}
+      if (pos === 'fixed' || pos === 'sticky') return true;
+      cur = cur.parentElement; hops++;
+    }
+    return false;
+  };
+  let y = 1;
+  let bottom = 0;
+  for (let i = 0; i < MAX_JUMPS; i++) {
+    if (y < 0 || y > window.innerHeight) break;
+    let topEl = null;
+    try { topEl = document.elementFromPoint(x, y); } catch (_) { break; }
+    if (!topEl) break;
+    if (topEl.id === hostId) break; // our own UI (defensive; should be pointer-events:none)
+    if (coreItem && (topEl === coreItem || coreItem.contains?.(topEl))) break; // reached the media
+    if (!isFixedOrSticky(topEl)) break; // benign static content above the media
+    const r = topEl.getBoundingClientRect?.();
+    if (!r) break;
+    if (r.top > bottom + PAD) break; // not contiguous from the top (e.g. side panel)
+    const nb = Math.round(r.bottom);
+    if (nb <= bottom) break; // no downward progress
+    bottom = nb;
+    y = nb + 1; // jump just below this chrome row and re-probe
+  }
+  return bottom;
+}
+
+// Anchors the status_badge to the OUTER TOP-RIGHT of the overlay rect: badge
+// right edge aligned to overlay right edge (inset), badge above the overlay's
+// unoccluded visible top. If that top would be clipped above the visible
+// region, the badge drops INTO the visible top instead (so it follows the
+// overlay down as the overlay scrolls off the top behind page chrome).
+export function positionCoreStatusBadgeToOverlay(overlayRect, coreItem) {
   try {
     const el = getKCBadgeShadowElement(CORE_BADGE_ID);
     if (!el || el.style.opacity === '0') return;
-    const x = Number(clientX);
-    const y = Number(clientY);
-    if (!isFinite(x) || !isFinite(y)) return;
-    const pad = 12;
-    const offset = 14;
+    if (!overlayRect || overlayRect.width <= 0 || overlayRect.height <= 0) return;
+    const PAD = 8;
+    const GAP = 6;
+    const RIGHT_INSET = 2;
     const r = el.getBoundingClientRect();
-    let left = x + offset;
-    let top = y + offset;
-    if (left + r.width > window.innerWidth - pad) left = Math.max(pad, x - r.width - offset);
-    if (top + r.height > window.innerHeight - pad) top = Math.max(pad, y - r.height - offset);
-    el.style.left = `${Math.round(left)}px`;
-    el.style.top = `${Math.round(top)}px`;
+    const badgeW = r.width || 0;
+    const badgeH = r.height || 0;
+    const probeX = Math.min(Math.round(overlayRect.right) - 1, window.innerWidth - PAD);
+    const chromeBottom = _topChromeBottomAt(probeX, coreItem);
+    const floor = chromeBottom > 0 ? chromeBottom + GAP : PAD;
+    // === PHASE_BADGE_ANCHOR_OVERLAY ===
+    // Right-anchor: fix the badge RIGHT edge to the overlay right edge (minus
+    // inset) so clip-time text changes (e.g. "Image clipped") grow/shrink
+    // leftward without breaking right alignment. left:auto is set below.
+    const anchorRight = Math.min(overlayRect.right, window.innerWidth - PAD);
+    const rightInset = Math.round(window.innerWidth - anchorRight + RIGHT_INSET);
+    // === END PHASE_BADGE_ANCHOR_OVERLAY ===
+    // Default: outer top-right, above the overlay. Clamp below top chrome /
+    // viewport top so the badge is never hidden behind a fixed header; when
+    // clamped it sits just inside the visible region and follows the overlay
+    // down as it scrolls off the top.
+    let top = Math.round(overlayRect.top - badgeH - GAP);
+    if (top < floor) top = Math.round(floor);
+    const maxTop = window.innerHeight - PAD - badgeH;
+    if (top > maxTop) top = Math.round(Math.max(PAD, maxTop));
+    el.style.left = 'auto';
+    el.style.right = `${rightInset}px`;
+    el.style.top = `${top}px`;
   } catch (e) {}
 }
+// === END PHASE_BADGE_ANCHOR_OVERLAY ===
 
 function ensureMetadataTooltip() {
   // === PHASE_BADGE_SHADOW_SEPARATE ===
@@ -604,7 +670,13 @@ export function showCoreHighlight(coreItem, isSaved = false, rectOverride = null
     }
 
     overlay.style.opacity = '1';
+    // === PHASE_BADGE_ANCHOR_OVERLAY ===
     showCoreStatusBadge('default');
+    // Anchor badge to the overlay's outer top-right (occlusion-aware), using
+    // the same rect `r` that positioned the overlay. Runs on every overlay
+    // (re)position: activation, scroll watcher, ResizeObserver, hover gate.
+    positionCoreStatusBadgeToOverlay(r, coreItem);
+    // === END PHASE_BADGE_ANCHOR_OVERLAY ===
 
     const isScrollUpdate = rectOverride !== null && !forceRestart;
 

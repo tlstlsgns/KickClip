@@ -23,7 +23,6 @@ import {
   setCoreBadgeTexts,
   setCoreStatusBadgeText,
   hideCoreStatusBadge,
-  positionCoreStatusBadge,
   renderItemMapCandidates,
   hideMetadataTooltip,
   detectItemCategory,
@@ -207,7 +206,7 @@ function initShortcutSync() {
 function syncCoreBadgeTexts() {
   const display = _activeShortcut ? formatShortcut(_activeShortcut) : 'shortcut';
   setCoreBadgeTexts({
-    defaultText: `Press ${display} to clip`,
+    defaultText: `${display} to clip`,
     failedText: 'Clip failed',
   });
 }
@@ -3653,7 +3652,11 @@ function schedulePreScanScrollDebounced() {
       _mouseInsideDocument = true;
     }
     if (state.activeCoreItem) {
-      positionCoreStatusBadge(e.clientX, e.clientY);
+      // === PHASE_BADGE_ANCHOR_OVERLAY ===
+      // Cursor tracking removed: the status_badge is now anchored to the
+      // overlay's top-right inside showCoreHighlight (uiManager), repositioned
+      // with the overlay on activation/scroll/resize. No per-move positioning.
+      // === END PHASE_BADGE_ANCHOR_OVERLAY ===
     }
     // Page badge stays fixed — no repositioning needed
 

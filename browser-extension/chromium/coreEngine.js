@@ -57,7 +57,6 @@ export {
   setCoreBadgeTexts,
   setCoreStatusBadgeText,
   hideCoreStatusBadge,
-  positionCoreStatusBadge,
   clearCoreSelection,
   setAiTooltipContent,
   clearAiTooltipContent,
