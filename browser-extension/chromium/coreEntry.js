@@ -206,7 +206,7 @@ function initShortcutSync() {
 function syncCoreBadgeTexts() {
   const display = _activeShortcut ? formatShortcut(_activeShortcut) : 'shortcut';
   setCoreBadgeTexts({
-    defaultText: `${display} to clip`,
+    defaultText: `Press ${display} to clip`,
     failedText: 'Clip failed',
   });
 }

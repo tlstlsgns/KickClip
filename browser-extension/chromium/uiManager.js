@@ -13,6 +13,13 @@ const CORE_BADGE_ID = 'kickclip-status-badge-core';
 // decisions out of uiManager — text composition (which depends on
 // platform-specific shortcut formatting) lives in coreEntry.
 let _coreBadgeDefaultText = '';
+// === PHASE_BADGE_ANCHOR_OVERLAY ===
+// Target viewport x of the badge's RIGHT edge (overlay right − inset), stored
+// by positionCoreStatusBadgeToOverlay so setCoreStatusBadgeText can re-pin the
+// right edge (via a viewport-coord left) when clip-time text changes the badge
+// width — without depending on innerWidth or a fixed containing block.
+let _badgeAnchorRightX = null;
+// === END PHASE_BADGE_ANCHOR_OVERLAY ===
 let _coreBadgeFailedText = '';
 
 // ── Debug flag ────────────────────────────────────────────────────────────
@@ -350,6 +357,11 @@ export function setCoreStatusBadgeText(text) {
     const el = getKCBadgeShadowElement(CORE_BADGE_ID);
     if (!el) return;
     el.textContent = String(text || '');
+    // === PHASE_BADGE_ANCHOR_OVERLAY ===
+    // Width changed -> re-pin right edge (viewport left coord; no innerWidth /
+    // containing-block dependency).
+    _reanchorBadgeLeft();
+    // === END PHASE_BADGE_ANCHOR_OVERLAY ===
   } catch (_) {}
 }
 
@@ -420,6 +432,24 @@ function _topChromeBottomAt(x, coreItem) {
   return bottom;
 }
 
+// === PHASE_BADGE_ANCHOR_OVERLAY ===
+// Re-pin the badge right edge to the last stored target x using a viewport
+// left coordinate (right:auto). Called when text-only changes alter width.
+function _reanchorBadgeLeft() {
+  try {
+    if (_badgeAnchorRightX == null) return;
+    const el = getKCBadgeShadowElement(CORE_BADGE_ID);
+    if (!el || el.style.opacity === '0') return;
+    const PAD = 8;
+    const w = el.getBoundingClientRect().width || 0;
+    let left = Math.round(_badgeAnchorRightX - w);
+    if (left < PAD) left = PAD;
+    el.style.right = 'auto';
+    el.style.left = `${left}px`;
+  } catch (_) {}
+}
+// === END PHASE_BADGE_ANCHOR_OVERLAY ===
+
 // Anchors the status_badge to the OUTER TOP-RIGHT of the overlay rect: badge
 // right edge aligned to overlay right edge (inset), badge above the overlay's
 // unoccluded visible top. If that top would be clipped above the visible
@@ -440,11 +470,15 @@ export function positionCoreStatusBadgeToOverlay(overlayRect, coreItem) {
     const chromeBottom = _topChromeBottomAt(probeX, coreItem);
     const floor = chromeBottom > 0 ? chromeBottom + GAP : PAD;
     // === PHASE_BADGE_ANCHOR_OVERLAY ===
-    // Right-anchor: fix the badge RIGHT edge to the overlay right edge (minus
-    // inset) so clip-time text changes (e.g. "Image clipped") grow/shrink
-    // leftward without breaking right alignment. left:auto is set below.
-    const anchorRight = Math.min(overlayRect.right, window.innerWidth - PAD);
-    const rightInset = Math.round(window.innerWidth - anchorRight + RIGHT_INSET);
+    // Horizontal: pin the badge RIGHT edge to the overlay right edge (minus
+    // inset) using a VIEWPORT-coordinate left (right:auto) — the same model
+    // the overlay uses (left + width) — so the badge aligns to the overlay
+    // regardless of any fixed containing block on the page. _badgeAnchorRightX
+    // is stored so setCoreStatusBadgeText can re-pin on text-width changes.
+    const targetRightX = Math.min(Math.round(overlayRect.right) - RIGHT_INSET, window.innerWidth - PAD);
+    _badgeAnchorRightX = targetRightX;
+    let left = Math.round(targetRightX - badgeW);
+    if (left < PAD) left = PAD;
     // === END PHASE_BADGE_ANCHOR_OVERLAY ===
     // Default: outer top-right, above the overlay. Clamp below top chrome /
     // viewport top so the badge is never hidden behind a fixed header; when
@@ -454,8 +488,8 @@ export function positionCoreStatusBadgeToOverlay(overlayRect, coreItem) {
     if (top < floor) top = Math.round(floor);
     const maxTop = window.innerHeight - PAD - badgeH;
     if (top > maxTop) top = Math.round(Math.max(PAD, maxTop));
-    el.style.left = 'auto';
-    el.style.right = `${rightInset}px`;
+    el.style.right = 'auto';
+    el.style.left = `${left}px`;
     el.style.top = `${top}px`;
   } catch (e) {}
 }
