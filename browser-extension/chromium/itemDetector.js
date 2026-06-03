@@ -3902,7 +3902,16 @@ function highestConcentricAncestor(mediaEl, mediaRect) {
   let depth = 0;
   while (cur && depth < 30) {
     const cr = cur.getBoundingClientRect?.();
-    if (!cr || cr.width <= 0 || cr.height <= 0) break; // no box (display:contents) / degenerate
+    if (!cr || cr.width <= 0 || cr.height <= 0) {
+      // Box-less / zero-size wrapper (display:contents OR a real height:0
+      // container, e.g. YouTube's div.html5-video-container between <video>
+      // and div.html5-video-player). These are layout-transparent, NOT a
+      // concentric-divergence signal — skip and keep walking upward without
+      // recording them as the result.
+      cur = cur.parentElement;
+      depth++;
+      continue;
+    }
     const ccx = cr.left + cr.width / 2;
     const ccy = cr.top + cr.height / 2;
     if (Math.abs(ccx - mcx) > OVERLAY_SIZE_TOLERANCE_PX ||

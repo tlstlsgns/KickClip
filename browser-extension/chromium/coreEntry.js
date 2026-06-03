@@ -832,6 +832,48 @@ let _observedOverlayElement = null;
 let _overlayRectWatchDebounceTimer = null;
 const KC_OVERLAY_RECT_WATCH_DEBOUNCE_MS = 50;
 
+// === PHASE_TYPE_E_OVERLAY_RERESOLVE ===
+// Re-resolve Type E overlay element when lazy media subtrees settle
+// (e.g. YouTube html5-video-player inserted as an ancestor after activation).
+function refreshTypeEOverlayElementIfChanged(coreItem) {
+  try {
+    if (!coreItem || coreItem.nodeType !== 1) return;
+    if (state.activeCoreItem !== coreItem) return;
+    const itemEntry = getItemMapEntryByElement(coreItem);
+    if (itemEntry?.evidenceType !== 'E') return;
+
+    const newOverlay = determineTypeEOverlayElement(coreItem) || coreItem;
+    if (newOverlay === state.activeOverlayElement) return;
+
+    state.activeOverlayElement = newOverlay;
+    _resetOverlayGate();
+
+    if (newOverlay === null) {
+      hideCoreHighlight();
+      unmountActiveOverlayRectWatcher();
+    } else if (
+      newOverlay !== coreItem &&
+      !isPointerInsideOverlay(newOverlay, lastPointerX, lastPointerY, null)
+    ) {
+      hideCoreHighlight();
+      unmountActiveOverlayRectWatcher();
+    } else {
+      const overlayRect = newOverlay === coreItem
+        ? null
+        : newOverlay.getBoundingClientRect?.();
+      if (overlayRect && overlayRect.width > 0 && overlayRect.height > 0) {
+        showCoreHighlight(coreItem, false, overlayRect);
+      } else {
+        showCoreHighlight(coreItem, false);
+      }
+      mountActiveOverlayRectWatcher(newOverlay);
+    }
+  } catch (_) {
+    // Defensive: never let re-resolve throw.
+  }
+}
+// === END PHASE_TYPE_E_OVERLAY_RERESOLVE ===
+
 function mountActiveOverlayRectWatcher(overlayElement) {
   unmountActiveOverlayRectWatcher();
 
@@ -852,6 +894,15 @@ function mountActiveOverlayRectWatcher(overlayElement) {
         if (_observedOverlayElement !== state.activeOverlayElement) return;
         const active = state.activeCoreItem;
         if (!active || (typeof active === 'object' && active.nodeType !== 1)) return;
+
+        // === PHASE_TYPE_E_OVERLAY_RERESOLVE (secondary: size-only settle) ===
+        if (active.nodeType === 1) {
+          const _ev2 = getItemMapEntryByElement(active)?.evidenceType;
+          if (_ev2 === 'E') {
+            refreshTypeEOverlayElementIfChanged(active);
+            if (_observedOverlayElement !== state.activeOverlayElement) return;
+          }
+        }
 
         const el = _observedOverlayElement;
         if (!el || el.nodeType !== 1) return;
@@ -1737,6 +1788,16 @@ function mountDomDrivenRedispatch() {
       const x = Number(lastPointerX);
       const y = Number(lastPointerY);
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+      // === PHASE_TYPE_E_OVERLAY_RERESOLVE (primary) ===
+      // Lazy media (e.g. YouTube inline preview player) is created AFTER
+      // activation; re-resolve the Type E overlay element here because this
+      // runs on any document mutation (debounced) and keys only on the active
+      // core item — it bypasses the hit/_lastMouseoverTarget guards below.
+      if (state.activeCoreItem && state.activeCoreItem.nodeType === 1) {
+        const _ev = getItemMapEntryByElement(state.activeCoreItem)?.evidenceType;
+        if (_ev === 'E') refreshTypeEOverlayElementIfChanged(state.activeCoreItem);
+      }
 
       const hit = document.elementFromPoint(x, y);
       if (!hit || hit.nodeType !== 1) return;
