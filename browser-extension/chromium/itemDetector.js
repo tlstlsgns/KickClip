@@ -982,6 +982,16 @@ function passesAxialRatio(imageRect, coreRect) {
   );
 }
 
+// === PHASE_TYPE_B_FULL_WIDTH_DOMINANCE_ESCAPE ===
+// Expanded captions ('더보기') multiply the Type B container height,
+// pushing heightRatio below the 0.4 relaxed gate even though the media
+// still fills the post's full width at a substantial absolute size.
+// A near-full-width image with a real absolute height is the post's
+// content by construction — keep it dominant regardless of heightRatio.
+const TYPE_B_FULL_WIDTH_RATIO = 0.85;   // "fills (almost) the full width"
+const TYPE_B_FULL_WIDTH_MIN_HEIGHT_PX = 240; // excludes thin full-width banners
+// === END PHASE_TYPE_B_FULL_WIDTH_DOMINANCE_ESCAPE ===
+
 function passesAxialRatioRelaxed(imageRect, coreRect) {
   const coreWidth = Number(coreRect?.width) || 0;
   const coreHeight = Number(coreRect?.height) || 0;
@@ -991,7 +1001,9 @@ function passesAxialRatioRelaxed(imageRect, coreRect) {
   if (mw <= 0 || mh <= 0) return false;
   const widthRatio = mw / coreWidth;
   const heightRatio = mh / coreHeight;
-  return widthRatio >= 0.4 && heightRatio >= 0.4;
+  if (widthRatio >= 0.4 && heightRatio >= 0.4) return true;
+  // PHASE_TYPE_B_FULL_WIDTH_DOMINANCE_ESCAPE: see consts above.
+  return widthRatio >= TYPE_B_FULL_WIDTH_RATIO && mh >= TYPE_B_FULL_WIDTH_MIN_HEIGHT_PX;
 }
 // === END PHASE_AXIAL_RATIO_HELPERS ===
 
@@ -2771,10 +2783,43 @@ const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItem
         typeDCandidates = typeDCandidatesRaw.filter((cand) => {
           const el = cand?.element;
           if (!el || el.nodeType !== 1) return true; // defensive — keep
+          // === PHASE_TYPE_D_SELF_EVIDENCE_DROP ===
+          // The D walk can resolve its card at the post-container level in
+          // uniform feeds; the share button then lives INSIDE the candidate,
+          // which the ancestor-only walk below never sees. A candidate whose
+          // own subtree carries share evidence IS the Type B unit — drop it
+          // here so it never enters typeDElementSet (which would make the
+          // Type B main loop skip the element and flip the post to Type D).
+          if (hasShareEvidenceCached(el)) return false; // drop — the candidate itself is the Type B unit
+          // === END PHASE_TYPE_D_SELF_EVIDENCE_DROP ===
           let cur = el.parentElement;
           let depth = 0;
           while (cur && depth < ANCESTOR_DEPTH_LIMIT) {
-            if (hasShareEvidenceCached(cur)) return false; // drop — Type B owns this
+            if (hasShareEvidenceCached(cur)) {
+              // === PHASE_TYPE_D_PAGE_LEVEL_ANCESTOR_RELAX ===
+              // hasShareButtonEvidence scans the ancestor's entire subtree, so a
+              // page-level container (e.g. Instagram profile root holding both
+              // the header's '메시지 보내기'/share-like controls AND the post
+              // grid) tests positive even though the evidence has nothing to do
+              // with this candidate. Such containers are never the Type B post
+              // that should "own" the candidate — Type B ownership only makes
+              // sense for post-sized wrappers. Page-level ancestors (near-
+              // fullscreen, or implausibly oversized vs the viewport — same
+              // 0.85 areaRatio bar as PHASE20_HOTFIX_SIZE_GUARD) are therefore
+              // ignored and the walk continues. primaryBItems already excludes
+              // near-fullscreen elements from Type B, so this is consistent.
+              let pageLevel = false;
+              try {
+                const r = cur.getBoundingClientRect?.();
+                const vw = Math.max(1, Number(window?.innerWidth || 0));
+                const vh = Math.max(1, Number(window?.innerHeight || 0));
+                const ancestorAreaRatio = r ? (Math.max(0, r.width) * Math.max(0, r.height)) / (vw * vh) : 0;
+                pageLevel = isNearFullscreenCandidate(cur) || ancestorAreaRatio > 0.85;
+              } catch (_) { pageLevel = false; }
+              if (!pageLevel) return false; // drop — a post-sized Type B owns this
+              // page-level: ignore this ancestor's evidence, keep walking
+              // === END PHASE_TYPE_D_PAGE_LEVEL_ANCESTOR_RELAX ===
+            }
             cur = cur.parentElement;
             depth++;
           }
@@ -2837,6 +2882,7 @@ const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItem
 
       const children = Array.from(parent.children).filter(Boolean);
       const groups = new Map();
+      const adoptedTypeB = new Set(); // PHASE_TYPE_B_STRUCTURAL_ADOPTION
       let i = 0;
       while (i < children.length) {
         const startRaw = children[i];
@@ -2891,7 +2937,42 @@ const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItem
           const identityMatch = isSimilarIdentity(identitySig, nextIdentity, 0.8);
           if (!identityMatch.matched) break;
           const nextEvidence = await getEvidenceType(cur);
-          if (!nextEvidence || nextEvidence !== evidenceType) break;
+          if (!nextEvidence || nextEvidence !== evidenceType) {
+            // === PHASE_TYPE_B_STRUCTURAL_ADOPTION ===
+            // Feed cards that match the run's identity AND internal structure
+            // and carry a dominant image are adopted into Type B runs even
+            // without share-button evidence. Some feeds omit the share button
+            // on a minority of otherwise-identical cards; before this, such a
+            // card was both excluded AND broke the run, fragmenting the feed.
+            // Safety: structure must match exactly or overlap >= 0.8 (stricter
+            // than the 0.65 share-backed fuzzy path), a dominant image is
+            // required, and the group-level >=50% share-evidence quorum in
+            // isMeaningfulItemMap still rejects over-adopted groups.
+            let adopted = false;
+            if (evidenceType === EVIDENCE_TYPE_INTERACTION && !nextEvidence) {
+              try {
+                const adoptStructure = getInternalStructure(cur, 3);
+                const structureOk =
+                  !!adoptStructure &&
+                  (adoptStructure === structureSig ||
+                    getStructureOverlapRatio(structureSig, adoptStructure) >= 0.8);
+                if (structureOk) {
+                  const doms = findDominantImagesInElement(cur, 'B');
+                  if (doms && doms.size >= 1) {
+                    adoptedTypeB.add(cur);
+                    run.push(cur);
+                    adopted = true;
+                  }
+                }
+              } catch (_) { /* defensive: adoption must never break the walk */ }
+            }
+            if (adopted) {
+              j += 1;
+              continue;
+            }
+            // === END PHASE_TYPE_B_STRUCTURAL_ADOPTION ===
+            break;
+          }
           const nextStructure = getInternalStructure(cur, 3);
           const exactStructureMatch = !!nextStructure && nextStructure === structureSig;
           let typeBFuzzyStructureMatch = false;
@@ -2931,7 +3012,10 @@ const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItem
         const passed = [];
         for (const el of list) {
           if (!isVisibleAndSized(el)) continue;
-          if ((await getEvidenceType(el)) === evidenceType) passed.push(el);
+          // PHASE_TYPE_B_STRUCTURAL_ADOPTION: adopted members carry no share
+          // evidence by definition; admit them here. The quorum inside
+          // isMeaningfulItemMap still requires >=50% evidenced members.
+          if ((await getEvidenceType(el)) === evidenceType || adoptedTypeB.has(el)) passed.push(el);
         }
         if (passed.length < minGroupSize) continue;
         if (!validateVisualLayout(passed)) continue;
@@ -3000,6 +3084,28 @@ const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItem
         }
       }
     }
+    // === PHASE_TYPE_B_CONTAINMENT_PRIORITY ===
+    // On SNS platforms, a Type D item resolved INSIDE a Type B item's
+    // element always yields to Type B — order-independent complement to
+    // the self-evidence drop (covers share controls living above the D
+    // wrapper, and B items added late by sibling expansion).
+    const dropTypeDContainedInTypeB = (items) => {
+      try {
+        if (!TYPE_B_PLATFORMS.has(getCurrentPlatform())) return items;
+        const bEls = items
+          .filter((x) => x?.evidenceType === EVIDENCE_TYPE_INTERACTION && x?.element)
+          .map((x) => x.element);
+        if (bEls.length === 0) return items;
+        return items.filter((x) => {
+          if (x?.evidenceType !== EVIDENCE_TYPE_IMAGE_ANCHOR || !x?.element) return true;
+          return !bEls.some((b) => b !== x.element && b.contains?.(x.element));
+        });
+      } catch (_) {
+        return items;
+      }
+    };
+    // === END PHASE_TYPE_B_CONTAINMENT_PRIORITY ===
+
     // === PHASE_TYPE_B_DE_INTEGRATION ===
     // Prefer Type B over Type D on same DOM element when platform is
     // in TYPE_B_PLATFORMS. SNS posts may match D card heuristics, but
@@ -3028,7 +3134,8 @@ const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItem
     }
     // === END PHASE_TYPE_B_DE_INTEGRATION ===
 
-    const recovered = [...deduped];
+    const dedupedBPriority = dropTypeDContainedInTypeB(deduped);
+    const recovered = [...dedupedBPriority];
 
     const depthOf = (el) => {
       let d = 0;
@@ -3213,6 +3320,7 @@ const { candidates: typeDCandidatesRaw, rejectedImages } = await detectTypeDItem
       dedupMergedByEl.set(el, item);
     }
     merged = Array.from(dedupMergedByEl.values());
+    merged = dropTypeDContainedInTypeB(merged);
     // === END PHASE_TYPE_B_DE_INTEGRATION ===
 
     const finalFiltered = merged.filter((item) => {
