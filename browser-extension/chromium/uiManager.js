@@ -48,6 +48,7 @@ let _activeCoreHighlightItem = null; // tracks which coreItem is currently highl
 
 const KC_SHADOW_HOST_ID = 'kickclip-shadow-host';
 let _kcShadowRoot = null;
+let _kcShadowHost = null; // host element ref for re-attach (PHASE_SHADOW_HOST_REATTACH)
 
 /**
  * Returns the KickClip shadow root, creating the host + shadow if needed.
@@ -59,7 +60,22 @@ let _kcShadowRoot = null;
  * pointer events as needed.
  */
 export function getKCShadowRoot() {
-  if (_kcShadowRoot) return _kcShadowRoot;
+  if (_kcShadowRoot) {
+    // === PHASE_SHADOW_HOST_REATTACH ===
+    // SPA hydration (e.g. Pinterest) can replace body content AFTER
+    // content-script init and remove our host from the DOM. The closed
+    // shadow root, injected stylesheet, and overlay element all survive
+    // on the detached host element — re-appending the same host fully
+    // restores rendering. Validated on every call so repeated page
+    // wipes are re-healed on the next overlay render.
+    if (_kcShadowHost && !_kcShadowHost.isConnected) {
+      try {
+        (document.body || document.documentElement).appendChild(_kcShadowHost);
+      } catch (e) { /* defensive: body may be mid-replacement */ }
+    }
+    // === END PHASE_SHADOW_HOST_REATTACH ===
+    return _kcShadowRoot;
+  }
 
   let host = document.getElementById(KC_SHADOW_HOST_ID);
   if (!host) {
@@ -81,6 +97,7 @@ export function getKCShadowRoot() {
     (document.body || document.documentElement).appendChild(host);
   }
 
+  _kcShadowHost = host;
   _kcShadowRoot = host.shadowRoot || host.attachShadow({ mode: 'closed' });
   return _kcShadowRoot;
 }
@@ -103,9 +120,18 @@ export function getKCShadowElement(id) {
 // modified at runtime.
 const KC_BADGE_SHADOW_HOST_ID = 'kickclip-badge-shadow-host';
 let _kcBadgeShadowRoot = null;
+let _kcBadgeShadowHost = null; // host element ref for re-attach (PHASE_SHADOW_HOST_REATTACH)
 
 function getKCBadgeShadowRoot() {
-  if (_kcBadgeShadowRoot) return _kcBadgeShadowRoot;
+  if (_kcBadgeShadowRoot) {
+    // PHASE_SHADOW_HOST_REATTACH: re-append detached badge host (same as main overlay host).
+    if (_kcBadgeShadowHost && !_kcBadgeShadowHost.isConnected) {
+      try {
+        (document.body || document.documentElement).appendChild(_kcBadgeShadowHost);
+      } catch (e) { /* defensive: body may be mid-replacement */ }
+    }
+    return _kcBadgeShadowRoot;
+  }
 
   let host = document.getElementById(KC_BADGE_SHADOW_HOST_ID);
   if (!host) {
@@ -123,6 +149,7 @@ function getKCBadgeShadowRoot() {
     (document.body || document.documentElement).appendChild(host);
   }
 
+  _kcBadgeShadowHost = host;
   _kcBadgeShadowRoot = host.shadowRoot || host.attachShadow({ mode: 'closed' });
 
   try {
