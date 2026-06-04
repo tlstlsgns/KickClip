@@ -1,4 +1,4 @@
-// upload.js — local folder upload: markdown export, sanitization, File System Access API.
+// upload.js — local folder upload: image export, sanitization, File System Access API.
 // Google Drive (Phase U3) is handled in sidepanel.js only.
 
 import { getPrimaryHandle, clearPrimaryHandle } from './uploadStorage.js';
@@ -176,53 +176,17 @@ function inferImageExtension(imgUrl, blob) {
   return 'png';
 }
 
-/** @param {string} s */
-function escapeYamlDoubleQuoted(s) {
-  return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-/** @param {object} item */
-function formatItemAsMarkdown(item) {
-  const titleRaw = (item.title || '').trim() || 'untitled';
-  const titleOneLine = titleRaw.replace(/\r?\n/g, ' ');
-  const url = String(item.url || '').trim();
-  const created = toDateFromCreated(item);
-  const createdIso = created.toISOString();
-  const category = String(item.category || '').trim();
-  const platform = String(item.platform || '').trim();
-  const imgUrl = String(item.img_url || '').trim();
-
-  const fm = ['---'];
-  fm.push(`title: "${escapeYamlDoubleQuoted(titleOneLine)}"`);
-  fm.push(`url: "${escapeYamlDoubleQuoted(url)}"`);
-  fm.push(`created: "${escapeYamlDoubleQuoted(createdIso)}"`);
-  fm.push(`category: "${escapeYamlDoubleQuoted(category)}"`);
-  if (platform) {
-    fm.push(`platform: "${escapeYamlDoubleQuoted(platform)}"`);
-  }
-  fm.push('---');
-  fm.push('');
-
-  const lines = [...fm, `# ${titleOneLine}`, ''];
-  if (imgUrl) {
-    lines.push(`![preview](${imgUrl})`);
-    lines.push('');
-  }
-  lines.push('---');
-  lines.push('');
-
-  const now = new Date();
-  const krDate = `${now.getFullYear()}년 ${now.getMonth() + 1}월 ${now.getDate()}일`;
-  lines.push(`- **URL**: <${url}>`);
-  lines.push(`- **저장 일시**: ${krDate}`);
-  const catLine = `- **카테고리**: ${category || '(none)'}`;
-  lines.push(catLine);
-  if (platform) {
-    lines.push(`- **플랫폼**: ${platform}`);
-  }
-  lines.push('');
-
-  return lines.join('\n');
+/** @param {Blob} blob */
+function extensionFromBlobType(blob) {
+  const t = (blob && blob.type) ? blob.type.toLowerCase() : '';
+  const mimeMap = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  };
+  return mimeMap[t] || 'jpg';
 }
 
 /** @param {string} imgUrl @param {string} [fallbackUrl] */
@@ -261,6 +225,30 @@ async function fetchImageAsBlob(imgUrl, fallbackUrl = '') {
   throw new Error('All image fetch attempts failed');
 }
 // === END PHASE27G_SAVE_FALLBACK ===
+
+// === PHASE_UPLOAD_IMAGE_ONLY ===
+// Every upload artifact is an image. Resolution order:
+//   1) img_url via background fetch-image (img_thumbnail_b64 as fetch
+//      fallback — existing fetchImageAsBlob behavior),
+//   2) img_thumbnail_b64 alone when img_url is empty (clip-time 400x400
+//      JPEG data URL; CORS-immune), usedFallback = true,
+//   3) neither -> null (caller emits its existing no-image failure).
+// The legacy non-Image -> markdown export (Phase U2) is removed: SNS and
+// category-less clips now upload their image like everything else.
+async function resolveItemImageBlob(item) {
+  const imgUrl = String(item?.img_url || '').trim();
+  const b64 = String(item?.img_thumbnail_b64 || '').trim();
+  if (imgUrl) {
+    const r = await fetchImageAsBlob(imgUrl, b64);
+    return { blob: r.blob, usedFallback: r.usedFallback, srcUrl: imgUrl };
+  }
+  if (b64.startsWith('data:')) {
+    const resp = await fetch(b64);
+    return { blob: await resp.blob(), usedFallback: true, srcUrl: '' };
+  }
+  return null;
+}
+// === END PHASE_UPLOAD_IMAGE_ONLY ===
 
 /** @param {FileSystemDirectoryHandle | null} handle */
 async function ensureWritableHandle(handle) {
@@ -358,33 +346,19 @@ export async function refreshPrimaryHandleCache() {
  */
 export async function saveItemViaDownloads(item) {
   try {
-    const category = (item.category || '').trim();
     let blob;
     let ext;
     let usedFallback = false;
 
-    if (category === 'Image') {
-      const imgUrl = (item.img_url || '').trim();
-      if (!imgUrl) {
-        return { ok: false, reason: 'generic', message: 'No image URL' };
-      }
-      // === PHASE_UPLOAD_FALLBACK_B64 ===
-      // img_url fetch failure: fall back to img_thumbnail_b64 (the inline
-      // 400x400 JPEG data URL saved at clip time — same image as clipboard,
-      // CORS-immune).
-      const imgResult = await fetchImageAsBlob(
-        imgUrl,
-        (item.img_thumbnail_b64 || '').trim()
-      );
-      blob = imgResult.blob;
-      usedFallback = imgResult.usedFallback;
-      // === END PHASE_UPLOAD_FALLBACK_B64 ===
-      ext = inferImageExtension(imgUrl, blob);
-    } else {
-      const md = formatItemAsMarkdown(item);
-      blob = new Blob([md], { type: 'text/markdown' });
-      ext = 'md';
+    const resolved = await resolveItemImageBlob(item);
+    if (!resolved) {
+      return { ok: false, reason: 'generic', message: 'No image URL' };
     }
+    blob = resolved.blob;
+    usedFallback = resolved.usedFallback;
+    ext = resolved.srcUrl
+      ? inferImageExtension(resolved.srcUrl, blob)
+      : extensionFromBlobType(blob);
 
     const rawTitle = (item.title || '').trim();
     let base = rawTitle ? rawTitle : fallbackFilenameBase(item);
@@ -499,33 +473,19 @@ export async function writeItemToHandle(handle, item) {
       return { ok: false, reason: 'permission', message: '' };
     }
 
-    const category = (item.category || '').trim();
     let blob;
     let ext;
     let usedFallback = false;
 
-    if (category === 'Image') {
-      const imgUrl = (item.img_url || '').trim();
-      if (!imgUrl) {
-        return { ok: false, reason: 'generic', message: 'No image URL' };
-      }
-      // === PHASE_UPLOAD_FALLBACK_B64 ===
-      // img_url fetch failure: fall back to img_thumbnail_b64 (the inline
-      // 400x400 JPEG data URL saved at clip time — same image as clipboard,
-      // CORS-immune).
-      const imgResult = await fetchImageAsBlob(
-        imgUrl,
-        (item.img_thumbnail_b64 || '').trim()
-      );
-      blob = imgResult.blob;
-      usedFallback = imgResult.usedFallback;
-      // === END PHASE_UPLOAD_FALLBACK_B64 ===
-      ext = inferImageExtension(imgUrl, blob);
-    } else {
-      const md = formatItemAsMarkdown(item);
-      blob = new Blob([md], { type: 'text/markdown' });
-      ext = 'md';
+    const resolved = await resolveItemImageBlob(item);
+    if (!resolved) {
+      return { ok: false, reason: 'generic', message: 'No image URL' };
     }
+    blob = resolved.blob;
+    usedFallback = resolved.usedFallback;
+    ext = resolved.srcUrl
+      ? inferImageExtension(resolved.srcUrl, blob)
+      : extensionFromBlobType(blob);
 
     const rawTitle = (item.title || '').trim();
     let base = rawTitle ? rawTitle : fallbackFilenameBase(item);
@@ -601,34 +561,19 @@ function blobToBase64(blob) {
  */
 export async function buildDriveUploadPayload(item) {
   try {
-    const category = (item.category || '').trim();
     let blob;
     let ext;
     let mimeType;
 
-    if (category === 'Image') {
-      const imgUrl = (item.img_url || '').trim();
-      if (!imgUrl) {
-        return { ok: false, reason: 'generic', message: 'No image URL' };
-      }
-      // === PHASE_UPLOAD_FALLBACK_B64 ===
-      // img_url fetch failure: fall back to img_thumbnail_b64 (the inline
-      // 400x400 JPEG data URL saved at clip time — same image as clipboard,
-      // CORS-immune).
-      const imgResult = await fetchImageAsBlob(
-        imgUrl,
-        (item.img_thumbnail_b64 || '').trim()
-      );
-      blob = imgResult.blob;
-      // === END PHASE_UPLOAD_FALLBACK_B64 ===
-      ext = inferImageExtension(imgUrl, blob);
-      mimeType = blob.type || (ext === 'jpg' ? 'image/jpeg' : `image/${ext}`);
-    } else {
-      const md = formatItemAsMarkdown(item);
-      blob = new Blob([md], { type: 'text/markdown' });
-      ext = 'md';
-      mimeType = 'text/markdown';
+    const resolved = await resolveItemImageBlob(item);
+    if (!resolved) {
+      return { ok: false, reason: 'generic', message: 'No image URL' };
     }
+    blob = resolved.blob;
+    ext = resolved.srcUrl
+      ? inferImageExtension(resolved.srcUrl, blob)
+      : extensionFromBlobType(blob);
+    mimeType = blob.type || (ext === 'jpg' ? 'image/jpeg' : `image/${ext}`);
 
     const rawTitle = (item.title || '').trim();
     let base = rawTitle ? rawTitle : fallbackFilenameBase(item);
@@ -667,28 +612,19 @@ export async function buildDriveUploadPayload(item) {
 //                                message?: string }>}
 export async function saveItemToDownloads(item) {
   try {
-    const category = (item.category || '').trim();
     let blob;
     let ext;
     let usedFallback = false;
 
-    if (category === 'Image') {
-      const imgUrl = (item.img_url || '').trim();
-      if (!imgUrl) {
-        return { ok: false, reason: 'generic', message: 'No image URL' };
-      }
-      const imgResult = await fetchImageAsBlob(
-        imgUrl,
-        (item.img_thumbnail_b64 || '').trim()
-      );
-      blob = imgResult.blob;
-      usedFallback = imgResult.usedFallback;
-      ext = inferImageExtension(imgUrl, blob);
-    } else {
-      const md = formatItemAsMarkdown(item);
-      blob = new Blob([md], { type: 'text/markdown' });
-      ext = 'md';
+    const resolved = await resolveItemImageBlob(item);
+    if (!resolved) {
+      return { ok: false, reason: 'generic', message: 'No image URL' };
     }
+    blob = resolved.blob;
+    usedFallback = resolved.usedFallback;
+    ext = resolved.srcUrl
+      ? inferImageExtension(resolved.srcUrl, blob)
+      : extensionFromBlobType(blob);
 
     const rawTitle = (item.title || '').trim();
     let base = rawTitle ? rawTitle : fallbackFilenameBase(item);
