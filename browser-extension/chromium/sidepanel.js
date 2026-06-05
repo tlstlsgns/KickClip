@@ -723,6 +723,82 @@ window.addEventListener('blur', () => {
 });
 // === END PHASE_SHORTCUT_RECORDER ===
 
+// === PHASE_CARD_MULTISELECT ===
+let _kcSelectedCardIds = new Set();
+
+function _kcGetCardSelectId(card) {
+  if (!card) return '';
+  return String(card.dataset.docId || card.dataset.itemId || '').trim();
+}
+
+function _kcApplyCardSelectionClasses() {
+  const liveIds = new Set();
+  document.querySelectorAll('.data-card').forEach((card) => {
+    const id = _kcGetCardSelectId(card);
+    if (!id) return;
+    liveIds.add(id);
+    card.classList.toggle('kc-card-selected', _kcSelectedCardIds.has(id));
+  });
+  for (const id of _kcSelectedCardIds) {
+    if (!liveIds.has(id)) _kcSelectedCardIds.delete(id);
+  }
+}
+
+function _kcClearCardSelection() {
+  if (_kcSelectedCardIds.size === 0) return;
+  _kcSelectedCardIds.clear();
+  _kcApplyCardSelectionClasses();
+}
+
+function _kcHandleCardSelectionClick(card, isShift) {
+  const id = _kcGetCardSelectId(card);
+  if (!id) return;
+  if (isShift) {
+    if (_kcSelectedCardIds.has(id)) _kcSelectedCardIds.delete(id);
+    else _kcSelectedCardIds.add(id);
+  } else if (_kcSelectedCardIds.size === 1 && _kcSelectedCardIds.has(id)) {
+    _kcSelectedCardIds.clear();
+  } else {
+    _kcSelectedCardIds.clear();
+    _kcSelectedCardIds.add(id);
+  }
+  _kcApplyCardSelectionClasses();
+}
+
+async function executeDeleteSelected() {
+  if (!currentUser || _kcSelectedCardIds.size === 0) return;
+  const ids = Array.from(_kcSelectedCardIds);
+  const list = getUnifiedDockList();
+  const cardsToRemove = [];
+  document.querySelectorAll('.data-card').forEach((card) => {
+    const id = _kcGetCardSelectId(card);
+    if (id && _kcSelectedCardIds.has(id)) {
+      const container = card.closest('.card-container');
+      if (container) cardsToRemove.push({ id, container });
+    }
+  });
+
+  await Promise.allSettled(
+    ids.map((docId) =>
+      fetch(
+        `${KC_SERVER_URL}/api/v1/items/${encodeURIComponent(docId)}?userId=${encodeURIComponent(currentUser.uid)}`,
+        { method: 'DELETE' }
+      )
+    )
+  );
+
+  cardsToRemove.forEach(({ container }) => container.remove());
+  _kcSelectedCardIds.clear();
+  _kcApplyCardSelectionClasses();
+  if (list) {
+    ensureEmptyState(list);
+    syncTimelineDividers(list);
+  }
+  updateClearButtonState();
+  showKcToast(`${ids.length} clip${ids.length === 1 ? '' : 's'} deleted`, 'success');
+}
+// === END PHASE_CARD_MULTISELECT ===
+
 // === PHASE_SIDEPANEL_UNIFIED_LIST ===
 let _clearBarExitConfirmPending = null;
 
@@ -1775,6 +1851,9 @@ async function executeClear(list, btn, exitConfirmPending) {
 
   // Toast.
   showKcToast(`${docIds.length} clips cleared`, 'success');
+  // === PHASE_CARD_MULTISELECT ===
+  _kcClearCardSelection();
+  // === END PHASE_CARD_MULTISELECT ===
 }
 // === END PHASE_SIDEPANEL_UNIFIED_LIST ===
 
@@ -1792,6 +1871,10 @@ function attachClearButtonHandlers() {
   const confirmText = bar.querySelector('.sp-clear-confirm-text');
 
   let dismissHandler = null;
+  // === PHASE_CARD_MULTISELECT ===
+  let confirmTimeout = null;
+  let confirmEscHandler = null;
+  // === END PHASE_CARD_MULTISELECT ===
 
   const exitConfirmPending = () => {
     bar.classList.remove('confirm-pending');
@@ -1805,6 +1888,16 @@ function attachClearButtonHandlers() {
       document.removeEventListener('click', dismissHandler, true);
       dismissHandler = null;
     }
+    // === PHASE_CARD_MULTISELECT ===
+    if (confirmTimeout) {
+      clearTimeout(confirmTimeout);
+      confirmTimeout = null;
+    }
+    if (confirmEscHandler) {
+      document.removeEventListener('keydown', confirmEscHandler);
+      confirmEscHandler = null;
+    }
+    // === END PHASE_CARD_MULTISELECT ===
   };
 
   _clearBarExitConfirmPending = exitConfirmPending;
@@ -1817,6 +1910,11 @@ function attachClearButtonHandlers() {
     if (!list) return;
 
     if (!bar.classList.contains('confirm-pending')) {
+      // === PHASE_CARD_MULTISELECT ===
+      if (_kcSelectedCardIds.size >= 1) {
+        executeDeleteSelected();
+        return;
+      }
       const cardCount = list.querySelectorAll('.card-container').length;
       if (cardCount === 0) return;
 
@@ -1824,20 +1922,26 @@ function attachClearButtonHandlers() {
       if (trashIcon) trashIcon.style.display = 'none';
       if (checkIcon) checkIcon.style.display = '';
       if (confirmText) {
-        confirmText.textContent = `Really delete ${cardCount} ${cardCount === 1 ? 'clip' : 'clips'}?`;
+        confirmText.textContent = 'Really delete all clips?';
         confirmText.style.display = '';
       }
 
       dismissHandler = (dismissEvent) => {
-        if (dismissEvent.target.closest('.sp-clear-btn') === btn) return;
+        if (dismissEvent.target.closest('.sp-clear-bar')) return;
         exitConfirmPending();
       };
+      confirmEscHandler = (keyEvent) => {
+        if (keyEvent.key === 'Escape') exitConfirmPending();
+      };
+      document.addEventListener('keydown', confirmEscHandler);
+      confirmTimeout = setTimeout(() => exitConfirmPending(), 5000);
       setTimeout(() => {
         if (dismissHandler) {
           document.addEventListener('click', dismissHandler, true);
         }
       }, 0);
       return;
+      // === END PHASE_CARD_MULTISELECT ===
     }
 
     // Second click: execute clear on the unified dock list.
@@ -2725,6 +2829,14 @@ function attachCardClickHandlers() {
       // Block any action when delete is pending
       if (clickedWrapper.classList.contains('delete-pending')) return;
 
+      // === PHASE_CARD_MULTISELECT ===
+      if (e.shiftKey) {
+        _kcHandleCardSelectionClick(newCard, true);
+        return;
+      }
+      _kcHandleCardSelectionClick(newCard, false);
+      // === END PHASE_CARD_MULTISELECT ===
+
       const url = newCard.dataset.url;
       if (!url) return;
 
@@ -2740,6 +2852,10 @@ function attachCardClickHandlers() {
 
     newCard.dataset.handlerAttached = 'true';
   });
+
+  // === PHASE_CARD_MULTISELECT ===
+  _kcApplyCardSelectionClasses();
+  // === END PHASE_CARD_MULTISELECT ===
 
   attachDeleteHandlers(document);
   attachUploadHandlers(document);
@@ -2768,7 +2884,20 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('.card-wrapper')) {
     deactivateAllCards();
   }
+  // === PHASE_CARD_MULTISELECT ===
+  if (!e.target.closest('.data-card') && !e.target.closest('.sp-clear-bar')) {
+    _kcClearCardSelection();
+  }
+  // === END PHASE_CARD_MULTISELECT ===
 }, { capture: false });
+
+// === PHASE_CARD_MULTISELECT ===
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  dismissClearConfirmPendingIfActive();
+  _kcClearCardSelection();
+});
+// === END PHASE_CARD_MULTISELECT ===
 
 // Deactivate active card when Chrome window loses focus
 window.addEventListener('blur', () => {

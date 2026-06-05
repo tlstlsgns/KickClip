@@ -354,6 +354,14 @@
       .kc-upload-format-menu-item-selected {
         color: var(--accent);
       }
+      /* === PHASE_CARD_MULTISELECT === */
+      .data-card.kc-card-selected {
+        background: rgba(188, 19, 254, 0.14);
+      }
+      .sp-clear-bar.confirm-pending .sp-clear-confirm-text {
+        color: var(--accent);
+      }
+      /* === END PHASE_CARD_MULTISELECT === */
     }
 
     /* ── Directory list ── */
@@ -693,6 +701,27 @@
     .card-container.image_card .data-card {
       height: 130px;
     }
+    /* === PHASE_CARD_MULTISELECT === */
+    .data-card.kc-card-selected {
+      outline: 2px solid var(--accent, #BC13FE);
+      outline-offset: -2px;
+      background: var(--accent-10, rgba(188, 19, 254, 0.10));
+      border-radius: 4px;
+      position: relative;
+    }
+    .data-card.kc-card-selected::after {
+      content: '✓';
+      position: absolute;
+      top: 2px;
+      right: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--accent, #BC13FE);
+      pointer-events: none;
+      z-index: 2;
+    }
+    /* === END PHASE_CARD_MULTISELECT === */
     .data-card * { pointer-events: none !important; }
 
     /* Header: domain + delete button */
@@ -1122,6 +1151,11 @@
       font-weight: 500;
       color: #A9A9AD;
     }
+    /* === PHASE_CARD_MULTISELECT === */
+    .sp-clear-bar.confirm-pending .sp-clear-confirm-text {
+      color: var(--accent, #BC13FE);
+    }
+    /* === END PHASE_CARD_MULTISELECT === */
 
     /* ── Loading state ── */
     .sp-loading {
