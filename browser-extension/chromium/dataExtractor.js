@@ -1346,6 +1346,218 @@ export function extractVideoMediaInfo(video) {
 // Returns: absolute image URL string (or empty string if all paths fail).
 // Width/height are NOT returned — callers compute from element rect.
 export function resolveClipImageUrl(coreItem, dominantImg) {
+  // === PHASE_RENDITION_UPGRADE ===
+  return resolveClipImageCandidates(coreItem, dominantImg).primary || '';
+  // === END PHASE_RENDITION_UPGRADE ===
+}
+
+// File-internal: parse srcset descriptors and return URL with highest
+// descriptor value. Handles both density (`Nx`) and width (`Nw`) units.
+// Uses the first unit seen; ignores candidates with a different unit
+// (HTML spec mandates single-unit srcsets, so mixed-unit input is rare).
+// Returns empty string on no valid candidate.
+function parseSrcsetMaxDescriptor(srcset) {
+  try {
+    return parseSrcsetBestMeta(srcset)?.url || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+// === PHASE_RENDITION_UPGRADE ===
+function parseSrcsetBestMeta(srcset) {
+  try {
+    const candidates = String(srcset || '').split(',').map((s) => s.trim()).filter(Boolean);
+    let bestUrl = '';
+    let bestValue = -1;
+    let bestUnit = null;
+    for (const candidate of candidates) {
+      const parts = candidate.split(/\s+/);
+      if (parts.length === 0) continue;
+      const url = parts[0];
+      if (!url) continue;
+      const descriptor = parts[1] || '1x';
+      const match = descriptor.match(/^([\d.]+)([xw])$/);
+      if (!match) continue;
+      const value = parseFloat(match[1]);
+      if (isNaN(value) || value < 0) continue;
+      const unit = match[2];
+      if (bestUnit === null) {
+        bestUnit = unit;
+        bestUrl = url;
+        bestValue = value;
+      } else if (unit === bestUnit && value > bestValue) {
+        bestUrl = url;
+        bestValue = value;
+      }
+    }
+    if (!bestUrl) return null;
+    return { url: bestUrl, value: bestValue, unit: bestUnit };
+  } catch (_) {
+    return null;
+  }
+}
+
+function bestPictureSourceUrl(img) {
+  try {
+    if (!img || img.nodeType !== 1) return '';
+    const picture = img.closest?.('picture');
+    if (!picture) return '';
+    const sources = picture.querySelectorAll?.('source') || [];
+    let bestW = null;
+    let bestX = null;
+    for (const source of sources) {
+      if (!source || source.nodeType !== 1) continue;
+      const meta = parseSrcsetBestMeta(source.getAttribute?.('srcset') || '');
+      if (!meta || !meta.url) continue;
+      if (meta.unit === 'w') {
+        if (!bestW || meta.value > bestW.value) bestW = meta;
+      } else if (meta.unit === 'x') {
+        if (!bestX || meta.value > bestX.value) bestX = meta;
+      }
+    }
+    if (bestW) return bestW.url;
+    if (bestX) return bestX.url;
+    return '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function collectBestDeclaredCandidate(img) {
+  const raw = [];
+  const seen = new Set();
+  const push = (v) => {
+    const s = String(v || '').trim();
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    raw.push(s);
+  };
+  try {
+    if (!img || img.nodeType !== 1) return { url: '', fallbacks: [] };
+    push(bestPictureSourceUrl(img));
+    push(parseSrcsetMaxDescriptor(img.getAttribute?.('srcset') || ''));
+    push(parseSrcsetMaxDescriptor(img.getAttribute?.('data-srcset') || ''));
+    push(img.currentSrc || '');
+    push(img.getAttribute?.('data-src') || '');
+    push(img.getAttribute?.('data-original') || '');
+    push(img.getAttribute?.('data-lazy-src') || '');
+    push(img.getAttribute?.('src') || '');
+    push(img.src || '');
+    const resolved = [];
+    const seenAbs = new Set();
+    for (const r of raw) {
+      const abs = resolveAbsoluteImageUrl(r);
+      if (!abs || seenAbs.has(abs)) continue;
+      seenAbs.add(abs);
+      resolved.push(abs);
+    }
+    return { url: resolved[0] || '', fallbacks: resolved.slice(1) };
+  } catch (_) {
+    return { url: '', fallbacks: [] };
+  }
+}
+
+const KC_RENDITION_CDN_RULES = [
+  {
+    id: 'pinterest',
+    test: (u) => /(^|\.)i\.pinimg\.com$/i.test(u.hostname) && /\/\d+x\d*\//.test(u.pathname),
+    rewrite: (u) => {
+      const next = u.pathname.replace(/\/\d+x\d*\//, '/originals/');
+      if (next === u.pathname) return null;
+      u.pathname = next;
+      return u.href;
+    },
+  },
+  {
+    id: 'twitter',
+    test: (u) => (
+      u.hostname === 'pbs.twimg.com' &&
+      u.searchParams.get('name') !== 'orig' &&
+      (u.searchParams.has('format') || u.pathname.startsWith('/media/'))
+    ),
+    rewrite: (u) => {
+      u.searchParams.set('name', 'orig');
+      return u.href;
+    },
+  },
+  {
+    id: 'instagram',
+    test: (u) => (
+      /\.cdninstagram\.com$/i.test(u.hostname) || /\.fbcdn\.net$/i.test(u.hostname)
+    ) && u.searchParams.has('stp'),
+    rewrite: (u) => {
+      const stp = String(u.searchParams.get('stp') || '');
+      if (!stp || !/_s\d+x\d+/i.test(stp)) return null;
+      const next = stp.replace(/_s\d+x\d+/gi, '');
+      if (!next || next === stp) return null;
+      u.searchParams.set('stp', next);
+      return u.href;
+    },
+  },
+  {
+    id: 'adobe',
+    test: (u) => {
+      if (u.hostname !== 'cdn.cp.adobe.io') return false;
+      const m = u.pathname.match(/\/dimension\/width\/size\/(\d+)/);
+      return !!(m && parseInt(m[1], 10) < 2048);
+    },
+    rewrite: (u) => {
+      const next = u.pathname.replace(
+        /\/dimension\/width\/size\/\d+/,
+        '/dimension/width/size/2048'
+      );
+      if (next === u.pathname) return null;
+      u.pathname = next;
+      return u.href;
+    },
+  },
+  {
+    id: 'naver',
+    test: (u) => /\.pstatic\.net$/i.test(u.hostname) && u.searchParams.has('type'),
+    rewrite: (u) => {
+      u.searchParams.delete('type');
+      return u.href;
+    },
+  },
+];
+
+function applyCdnRewriteRules(absUrl) {
+  const original = String(absUrl || '').trim();
+  if (!original) return { url: '', rewritten: false, original: '' };
+  try {
+    const u = new URL(original);
+    for (const rule of KC_RENDITION_CDN_RULES) {
+      try {
+        if (!rule.test(u)) continue;
+        const rewritten = rule.rewrite(u);
+        if (rewritten && rewritten !== original) {
+          return { url: rewritten, rewritten: true, original };
+        }
+      } catch (_) { /* try next rule */ }
+    }
+    return { url: original, rewritten: false, original };
+  } catch (_) {
+    return { url: original, rewritten: false, original };
+  }
+}
+
+function packClipImageCandidates(absUrl, declaredFallbacks = []) {
+  const abs = resolveAbsoluteImageUrl(absUrl);
+  if (!abs || !/^https?:\/\//i.test(abs)) {
+    return { primary: '', fallbacks: [] };
+  }
+  const { url, rewritten, original } = applyCdnRewriteRules(abs);
+  const fallbacks = [];
+  if (rewritten && original && original !== url) fallbacks.push(original);
+  for (const fb of declaredFallbacks) {
+    const absFb = resolveAbsoluteImageUrl(fb);
+    if (absFb && absFb !== url && !fallbacks.includes(absFb)) fallbacks.push(absFb);
+  }
+  return { primary: url || abs, fallbacks };
+}
+
+export function resolveClipImageCandidates(coreItem, dominantImg) {
   try {
     const hostname = String(window?.location?.hostname || '').toLowerCase().trim();
 
@@ -1360,7 +1572,7 @@ export function resolveClipImageUrl(coreItem, dominantImg) {
             const u = new URL(href, window.location.origin);
             const imgurl = u.searchParams.get('imgurl');
             if (imgurl && /^https?:\/\//i.test(imgurl)) {
-              return imgurl;
+              return packClipImageCandidates(imgurl);
             }
           }
         }
@@ -1384,105 +1596,143 @@ export function resolveClipImageUrl(coreItem, dominantImg) {
             const proxyUrl = new URL(proxySrc);
             const originalUrl = proxyUrl.searchParams.get('src');
             if (originalUrl && /^https?:\/\//i.test(originalUrl)) {
-              return originalUrl;
+              return packClipImageCandidates(originalUrl);
             }
           }
         }
       } catch (_) { /* fall through */ }
     }
 
-    // 3. Generic srcset parser: highest descriptor URL (host-independent)
-    if (dominantImg) {
-      const srcset = String(dominantImg.getAttribute?.('srcset') || '').trim();
-      if (srcset) {
-        const maxUrl = parseSrcsetMaxDescriptor(srcset);
-        if (maxUrl) {
-          const absolute = resolveAbsoluteImageUrl(maxUrl);
-          if (absolute && /^https?:\/\//i.test(absolute)) {
-            return absolute;
-          }
-        }
+    // 3. Declared candidates on dominant <img> (picture/srcset/lazy/currentSrc/src)
+    if (dominantImg && String(dominantImg.tagName || '').toUpperCase() === 'IMG') {
+      const declared = collectBestDeclaredCandidate(dominantImg);
+      if (declared.url) {
+        const packed = packClipImageCandidates(declared.url, declared.fallbacks);
+        if (packed.primary) return packed;
       }
     }
 
-    // 4. Pinterest path transform: /236x/ → /originals/ (fallback for pins without srcset)
-    const isPinterestHost = /^([\w-]+\.)*pinterest\.[\w.]+$/i.test(hostname);
-    if (isPinterestHost && dominantImg) {
-      try {
-        const rawSrc = String(
-          dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src || ''
-        ).trim();
-        if (rawSrc && /pinimg\.com\/\d+x\//i.test(rawSrc)) {
-          const transformed = rawSrc.replace(
-            /^(https?:\/\/[^/]*pinimg\.com\/)\d+x\//i,
-            '$1originals/'
-          );
-          const absolute = resolveAbsoluteImageUrl(transformed);
-          if (absolute && /^https?:\/\//i.test(absolute)) {
-            return absolute;
-          }
-        }
-      } catch (_) { /* fall through */ }
-    }
-
-    // 5. Background-image DIV fallback: dominant element with no src
-    //    but inline background-image URL. Reuses the same admission
-    //    helper from itemDetector to guarantee admit-time and
-    //    extract-time URLs agree (single source of truth, no drift).
+    // 4. Background-image DIV fallback: dominant element with no usable src
     // === PHASE_BG_IMAGE_CLIP_FALLBACK ===
     if (dominantImg) {
-      const srcAttr = dominantImg.getAttribute?.('src') || dominantImg.currentSrc || dominantImg.src || '';
-      if (srcAttr) {
-        return resolveAbsoluteImageUrl(srcAttr);
-      }
-      // No src — try inline background-image (Type B/D bg-DIV dominant).
       const bgUrl = extractInlineBackgroundImageUrl(dominantImg);
-      if (bgUrl) return bgUrl;
+      if (bgUrl) return packClipImageCandidates(bgUrl);
     }
     // === END PHASE_BG_IMAGE_CLIP_FALLBACK ===
-    return '';
+    return { primary: '', fallbacks: [] };
   } catch (_) {
-    return '';
+    return { primary: '', fallbacks: [] };
   }
 }
 
-// File-internal: parse srcset descriptors and return URL with highest
-// descriptor value. Handles both density (`Nx`) and width (`Nw`) units.
-// Uses the first unit seen; ignores candidates with a different unit
-// (HTML spec mandates single-unit srcsets, so mixed-unit input is rare).
-// Returns empty string on no valid candidate.
-function parseSrcsetMaxDescriptor(srcset) {
-  try {
-    const candidates = String(srcset || '').split(',').map((s) => s.trim()).filter(Boolean);
-    let bestUrl = '';
-    let bestValue = -1;
-    let bestUnit = null;  // 'x' or 'w'
-    for (const candidate of candidates) {
-      const parts = candidate.split(/\s+/);
-      if (parts.length === 0) continue;
-      const url = parts[0];
-      if (!url) continue;
-      const descriptor = parts[1] || '1x';  // bare URL means 1x default
-      const match = descriptor.match(/^([\d.]+)([xw])$/);
-      if (!match) continue;
-      const value = parseFloat(match[1]);
-      if (isNaN(value) || value < 0) continue;
-      const unit = match[2];
-      if (bestUnit === null) {
-        bestUnit = unit;
-        bestUrl = url;
-        bestValue = value;
-      } else if (unit === bestUnit && value > bestValue) {
-        bestUrl = url;
-        bestValue = value;
-      }
-      // mixed-unit candidates: ignore (keep current bestUnit's max)
-    }
-    return bestUrl;
-  } catch (_) {
-    return '';
+const KC_RENDITION_VALIDATE_TIMEOUT_MS = 900;
+const KC_RENDITION_VALIDATE_MAX_PROBES = 3;
+const KC_RENDITION_DEBUG = false;
+const _kcRenditionProbeCache = new Map();
+const _KC_RENDITION_PROBE_CACHE_MAX = 50;
+
+function _kcRenditionProbeCacheSet(url, result) {
+  if (_kcRenditionProbeCache.has(url)) _kcRenditionProbeCache.delete(url);
+  _kcRenditionProbeCache.set(url, result);
+  while (_kcRenditionProbeCache.size > _KC_RENDITION_PROBE_CACHE_MAX) {
+    const oldest = _kcRenditionProbeCache.keys().next().value;
+    if (oldest === undefined) break;
+    _kcRenditionProbeCache.delete(oldest);
   }
 }
+
+function probeImageUrl(url) {
+  const key = String(url || '').trim();
+  if (!key) return Promise.resolve({ ok: false, naturalWidth: 0 });
+  if (_kcRenditionProbeCache.has(key)) {
+    return Promise.resolve(_kcRenditionProbeCache.get(key));
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      _kcRenditionProbeCacheSet(key, result);
+      resolve(result);
+    };
+    const img = new Image();
+    const timer = setTimeout(
+      () => finish({ ok: false, naturalWidth: 0 }),
+      KC_RENDITION_VALIDATE_TIMEOUT_MS
+    );
+    img.onload = () => {
+      clearTimeout(timer);
+      finish({ ok: true, naturalWidth: Number(img.naturalWidth) || 0 });
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      finish({ ok: false, naturalWidth: 0 });
+    };
+    img.src = key;
+  });
+}
+
+export async function validateClipImageUrl(primaryUrl, fallbackUrls, floorEl) {
+  const primary = String(primaryUrl || '').trim();
+  try {
+    const floorWidth = Number(floorEl?.naturalWidth) || 0;
+    const floorUrl = String(floorEl?.currentSrc || floorEl?.src || '').trim();
+    const probeList = [];
+    const seen = new Set();
+    const addProbe = (u) => {
+      const s = String(u || '').trim();
+      if (!s || seen.has(s)) return;
+      seen.add(s);
+      probeList.push(s);
+    };
+    addProbe(primary);
+    for (const fb of Array.isArray(fallbackUrls) ? fallbackUrls : []) addProbe(fb);
+    const limited = probeList.slice(0, KC_RENDITION_VALIDATE_MAX_PROBES);
+    const probed = [];
+    for (const u of limited) {
+      const r = await probeImageUrl(u);
+      probed.push({ url: u, ok: r.ok, naturalWidth: r.naturalWidth });
+      if (r.ok && (floorWidth <= 0 || r.naturalWidth >= floorWidth)) {
+        if (KC_RENDITION_DEBUG) {
+          console.log('[KICKCLIP-LOG] rendition validate ' + JSON.stringify({
+            picked: u,
+            nw: r.naturalWidth,
+            floorWidth,
+            probed: probed.length,
+          }));
+        }
+        return u;
+      }
+    }
+    const okProbed = probed.filter((p) => p.ok);
+    if (okProbed.length > 0) {
+      okProbed.sort((a, b) => b.naturalWidth - a.naturalWidth);
+      const picked = okProbed[0].url;
+      if (KC_RENDITION_DEBUG) {
+        console.log('[KICKCLIP-LOG] rendition validate ' + JSON.stringify({
+          picked,
+          nw: okProbed[0].naturalWidth,
+          floorWidth,
+          probed: probed.length,
+        }));
+      }
+      return picked;
+    }
+    const picked = floorUrl || primary;
+    if (KC_RENDITION_DEBUG) {
+      console.log('[KICKCLIP-LOG] rendition validate ' + JSON.stringify({
+        picked,
+        nw: 0,
+        floorWidth,
+        probed: probed.length,
+      }));
+    }
+    return picked;
+  } catch (_) {
+    return primary;
+  }
+}
+// === END PHASE_RENDITION_UPGRADE ===
 // === END PHASE_PLATFORM_ORIGINAL_URL_HELPER ===
 
 export function extractImageFromCoreItem(coreItem) {
@@ -1647,9 +1897,9 @@ export function extractImageFromCoreItem(coreItem) {
               const r = img.getBoundingClientRect
                 ? img.getBoundingClientRect()
                 : null;
-              const src = resolveAbsoluteImageUrl(
-                img.getAttribute?.('src') || img.currentSrc || img.src
-              );
+              const _igDeclared = collectBestDeclaredCandidate(img);
+              const _igPacked = packClipImageCandidates(_igDeclared.url, _igDeclared.fallbacks);
+              const src = _igPacked.primary;
               if (src && r && r.width > 0 && r.height > 0) {
                 return {
                   image: {
@@ -1695,9 +1945,10 @@ export function extractImageFromCoreItem(coreItem) {
             const w = u.searchParams.get('w');
             const h = u.searchParams.get('h');
             if (imgurl && /^https?:\/\//i.test(imgurl)) {
+              const _gPacked = packClipImageCandidates(imgurl);
               return {
                 image: {
-                  url: imgurl,
+                  url: _gPacked.primary || imgurl,
                   width: parseInt(w, 10) || 0,
                   height: parseInt(h, 10) || 0,
                 },
@@ -1749,9 +2000,10 @@ export function extractImageFromCoreItem(coreItem) {
               10
             ) || 0;
             if (originalUrl && /^https?:\/\//i.test(originalUrl)) {
+              const _nPacked = packClipImageCandidates(originalUrl);
               return {
                 image: {
-                  url: originalUrl,
+                  url: _nPacked.primary || originalUrl,
                   width: w,
                   height: h,
                 },
@@ -1765,20 +2017,8 @@ export function extractImageFromCoreItem(coreItem) {
       }
     }
 
-    // Pinterest pin: extract original-resolution URL by either
-    // parsing srcset's 4x descriptor or by replacing the size
-    // segment in src.
-    //
-    // Pinterest serves images via i.pinimg.com with size variants
-    // in the URL path: /236x/, /474x/, /736x/, /originals/, etc.
-    // The /originals/ variant is the full resolution.
-    //
-    // Detection: host matches pinterest.<tld> AND coreItem contains
-    // an <img> with i.pinimg.com URL (in src or srcset).
-    //
-    // URL extraction strategy:
-    //   1. Parse srcset for the 4x descriptor (typically /originals/)
-    //   2. Fallback: replace the size segment in src with "originals"
+    // Pinterest pin: highest srcset descriptor, then path-transform
+    // fallback, then CDN rewrite (PHASE_RENDITION_UPGRADE).
     const pinterestHostname = String(window?.location?.hostname || '').toLowerCase().trim();
     const isPinterestHost = /^([\w-]+\.)*pinterest\.[\w.]+$/i.test(pinterestHostname);
     if (isPinterestHost) {
@@ -1786,36 +2026,21 @@ export function extractImageFromCoreItem(coreItem) {
         'img[src*="pinimg.com"], img[srcset*="pinimg.com"]'
       );
       if (pinterestImg) {
-        let originalUrl = '';
         try {
-          // Strategy 1: srcset's 4x descriptor (typically the
-          // originals URL).
-          const srcset = String(
-            pinterestImg.getAttribute?.('srcset') || ''
-          ).trim();
-          if (srcset) {
-            const match = srcset.match(/(\S+)\s+4x(?:\s*,|\s*$)/);
-            if (match && match[1]) {
-              originalUrl = match[1];
-            }
-          }
-          // Strategy 2: fall back to src path conversion.
+          let originalUrl = '';
+          const srcset = String(pinterestImg.getAttribute?.('srcset') || '').trim();
+          if (srcset) originalUrl = parseSrcsetMaxDescriptor(srcset);
           if (!originalUrl) {
-            const src = String(
-              pinterestImg.getAttribute?.('src') || pinterestImg.currentSrc || pinterestImg.src || ''
-            ).trim();
-            if (src && /pinimg\.com\/\d+x\//i.test(src)) {
-              originalUrl = src.replace(
-                /^(https?:\/\/[^/]*pinimg\.com\/)\d+x\//i,
-                '$1originals/'
-              );
-            }
+            const _pDeclared = collectBestDeclaredCandidate(pinterestImg);
+            originalUrl = _pDeclared.url || '';
+          } else {
+            originalUrl = resolveAbsoluteImageUrl(originalUrl);
           }
-          originalUrl = resolveAbsoluteImageUrl(originalUrl);
-          if (originalUrl && /^https?:\/\//i.test(originalUrl)) {
+          const _pPacked = packClipImageCandidates(originalUrl);
+          if (_pPacked.primary && /^https?:\/\//i.test(_pPacked.primary)) {
             return {
               image: {
-                url: originalUrl,
+                url: _pPacked.primary,
                 width: 0,
                 height: 0,
               },
@@ -1913,7 +2138,9 @@ export function extractImageFromCoreItem(coreItem) {
     for (const img of imgNodes) {
       const r = getEffectiveImageRect(img);
       if (!isVisuallySignificantImage(r)) continue;
-      const src = resolveAbsoluteImageUrl(img.getAttribute('src') || img.currentSrc || img.src);
+      const _declared = collectBestDeclaredCandidate(img);
+      const _packed = packClipImageCandidates(_declared.url, _declared.fallbacks);
+      const src = _packed.primary;
       if (!src) continue;
       // Skip profile/avatar images — "profile_images" in the URL path is
       // a reliable cross-platform signal that the image is a user avatar,

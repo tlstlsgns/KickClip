@@ -32,6 +32,8 @@ import {
   resolveAbsoluteImageUrl,
   extractVideoMediaInfo,
   resolveClipImageUrl,
+  resolveClipImageCandidates,
+  validateClipImageUrl,
   closestAnchorLike,
   getNavigableAnchorUrl,
 } from './dataExtractor.js';
@@ -2345,6 +2347,7 @@ async function saveActiveCoreItem(request = {}) {
     // (no DOM methods). Re-extraction is skipped in that case; cached image
     // is used.
     let freshImage = meta?.image;
+    let _clipDominantEl = null;
     try {
       const activeCoreEl = state.activeCoreItem;
       if (activeCoreEl && typeof activeCoreEl.getBoundingClientRect === 'function') {
@@ -2353,6 +2356,7 @@ async function saveActiveCoreItem(request = {}) {
         if (evType === 'B' || evType === 'D') {
           const dominantImgs = findDominantImagesInElement(activeCoreEl, evType);
           const dominantImg = dominantImgs.values().next().value || null;
+          _clipDominantEl = dominantImg;
           if (dominantImg) {
             const dominantTag = String(dominantImg.tagName || '').toUpperCase();
             if (dominantTag === 'VIDEO' || dominantTag === 'SHREDDIT-PLAYER') {
@@ -2392,6 +2396,33 @@ async function saveActiveCoreItem(request = {}) {
       }
     } catch (e) { /* keep cached image */ }
     // === END PHASE20_HOTFIX_CLIP_TIME_IMAGE ===
+
+    // === PHASE_RENDITION_UPGRADE ===
+    if (freshImage?.url) {
+      try {
+        const activeCoreEl = state.activeCoreItem;
+        let _dominantEl = _clipDominantEl;
+        if (!_dominantEl && activeCoreEl && typeof activeCoreEl.getBoundingClientRect === 'function') {
+          const _coreTag = String(activeCoreEl.tagName || '').toUpperCase();
+          if (_coreTag === 'IMG') {
+            _dominantEl = activeCoreEl;
+          } else {
+            _dominantEl = pickDominantImageElement(activeCoreEl) || null;
+          }
+        }
+        let _fallbacks = [];
+        try {
+          if (_dominantEl && activeCoreEl && typeof activeCoreEl.getBoundingClientRect === 'function') {
+            const _cands = resolveClipImageCandidates(activeCoreEl, _dominantEl);
+            _fallbacks = (_cands?.primary && _cands.primary !== freshImage.url)
+              ? [_cands.primary, ...(_cands.fallbacks || [])]
+              : (_cands?.fallbacks || []);
+          }
+        } catch (_) {}
+        freshImage.url = await validateClipImageUrl(freshImage.url, _fallbacks, _dominantEl);
+      } catch (_) { /* keep freshImage.url as-is */ }
+    }
+    // === END PHASE_RENDITION_UPGRADE ===
 
     // Relay mode: top-frame is processing a clip that originated inside a
     // cross-origin iframe. The iframe handler posts metadata only (no UI).
