@@ -41,6 +41,7 @@ import {
   // === PHASE_UPLOAD_AUTO_ROUTING ===
   saveItemToDownloads,
   // === END PHASE_UPLOAD_AUTO_ROUTING ===
+  resolveItemClipboardPngBlob,
 } from './upload.js';
 import {
   getDestination,
@@ -713,9 +714,9 @@ onShortcutChange((newShortcut) => {
 // the new tab. window.blur, however, fires reliably when the sidepanel
 // window itself loses focus (verified empirically).
 //
-// Clicking on the host page does NOT blur the sidepanel — the sidepanel
-// retains focus during normal browsing. blur only fires for true focus
-// transitions (new tab, new window, OS-level switches).
+// Clicking on the host page DOES blur the sidepanel window (maintainer-
+// verified empirically). blur is therefore also used to clear card
+// activation and multi-selection (see deactivateAllCards blur listener).
 window.addEventListener('blur', () => {
   if (_sp_recording) {
     sp_stopRecording(false);
@@ -1246,6 +1247,19 @@ function createDataCard(item) {
   const escapedImgUrl = imgUrl.replace(/"/g, '&quot;');
   const directoryId  = item.directoryId && item.directoryId !== 'undefined' ? item.directoryId : '';
 
+  // === PHASE_CARD_CLIPBOARD_COPY ===
+  const clipBtn = `
+    <div class="data-card-clip" title="Copy image to clipboard">
+      <button type="button" class="data-card-clip-btn" aria-label="Copy image to clipboard">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+        </svg>
+        <svg class="kc-upload-mark kc-upload-mark--check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <svg class="kc-upload-mark kc-upload-mark--x" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>`;
+  // === END PHASE_CARD_CLIPBOARD_COPY ===
+
   // Upload button HTML (shared) — appears immediately left of delete in header
   const uploadBtn = `
     <div class="data-card-upload" title="Upload to folder">
@@ -1294,6 +1308,7 @@ function createDataCard(item) {
   const headerHtml = `
     <div class="data-card-header">
       <div class="data-card-context">${contextHtml}</div>
+      ${clipBtn}
       ${uploadBtn}
       ${deleteBtn}
     </div>`;
@@ -1874,6 +1889,9 @@ function attachClearButtonHandlers() {
   // === PHASE_CARD_MULTISELECT ===
   let confirmTimeout = null;
   let confirmEscHandler = null;
+  // 'selected' = confirm pending for the current multi-selection;
+  // 'all' = confirm pending for clear-all. Reset on exit.
+  let confirmMode = null;
   // === END PHASE_CARD_MULTISELECT ===
 
   const exitConfirmPending = () => {
@@ -1897,6 +1915,7 @@ function attachClearButtonHandlers() {
       document.removeEventListener('keydown', confirmEscHandler);
       confirmEscHandler = null;
     }
+    confirmMode = null;
     // === END PHASE_CARD_MULTISELECT ===
   };
 
@@ -1911,18 +1930,21 @@ function attachClearButtonHandlers() {
 
     if (!bar.classList.contains('confirm-pending')) {
       // === PHASE_CARD_MULTISELECT ===
-      if (_kcSelectedCardIds.size >= 1) {
-        executeDeleteSelected();
-        return;
+      const selectedCount = _kcSelectedCardIds.size;
+      if (selectedCount === 0) {
+        const cardCount = list.querySelectorAll('.card-container').length;
+        if (cardCount === 0) return;
       }
-      const cardCount = list.querySelectorAll('.card-container').length;
-      if (cardCount === 0) return;
+      confirmMode = selectedCount >= 1 ? 'selected' : 'all';
 
       bar.classList.add('confirm-pending');
       if (trashIcon) trashIcon.style.display = 'none';
       if (checkIcon) checkIcon.style.display = '';
       if (confirmText) {
-        confirmText.textContent = 'Really delete all clips?';
+        confirmText.textContent =
+          confirmMode === 'selected'
+            ? `Really delete ${selectedCount} clip${selectedCount === 1 ? '' : 's'}?`
+            : 'Really delete all clips?';
         confirmText.style.display = '';
       }
 
@@ -1944,6 +1966,16 @@ function attachClearButtonHandlers() {
       // === END PHASE_CARD_MULTISELECT ===
     }
 
+    // === PHASE_CARD_MULTISELECT ===
+    // Second click while pending for a multi-selection: delete only the
+    // selected cards. confirmMode must be read BEFORE exitConfirmPending
+    // (exit resets it to null).
+    if (confirmMode === 'selected') {
+      exitConfirmPending();
+      executeDeleteSelected();
+      return;
+    }
+    // === END PHASE_CARD_MULTISELECT ===
     // Second click: execute clear on the unified dock list.
     executeClear(list, btn, exitConfirmPending);
   });
@@ -2137,6 +2169,30 @@ function flashUploadMark(btnEl, success) {
     btnEl.classList.remove(cls, 'kc-upload--feedback');
   }, 1200);
 }
+
+// === PHASE_CARD_CLIPBOARD_COPY ===
+function handleClipButtonClick(item, anchorBtn) {
+  const imgUrl = String(item?.img_url || '').trim();
+  const proxied = getProxiedImageUrl(imgUrl);
+  const pngPromise = resolveItemClipboardPngBlob(
+    item,
+    proxied && proxied !== imgUrl ? proxied : ''
+  ).then((png) => {
+    if (!png) throw new Error('clipboard image resolve failed');
+    return png;
+  });
+  navigator.clipboard
+    .write([new ClipboardItem({ 'image/png': pngPromise })])
+    .then(() => {
+      flashUploadMark(anchorBtn, true);
+      showKcToast('클립보드에 복사 완료', 'success');
+    })
+    .catch(() => {
+      flashUploadMark(anchorBtn, false);
+      showKcToast('이미지 복사에 실패했습니다', 'error');
+    });
+}
+// === END PHASE_CARD_CLIPBOARD_COPY ===
 
 function handleLocalUpload(item, anchorBtn) {
   saveItemViaDownloads(item)
@@ -2455,6 +2511,7 @@ function openKcUploadPopover(anchorBtn, item) {
   const outside = (ev) => {
     if (ev.target.closest('.kc-upload-popover')) return;
     if (ev.target.closest('.data-card-upload')) return;
+    if (ev.target.closest('.data-card-clip')) return;
     closeKcUploadPopover();
   };
   kcUploadOutsideDismiss = outside;
@@ -2463,6 +2520,26 @@ function openKcUploadPopover(anchorBtn, item) {
   }, 0);
   document.addEventListener('keydown', onKcUploadEscapeKey, false);
 }
+
+// === PHASE_CARD_CLIPBOARD_COPY ===
+function attachClipHandlers(container) {
+  container.querySelectorAll('.data-card-clip').forEach((wrap) => {
+    const newWrap = wrap.cloneNode(true);
+    wrap.parentNode.replaceChild(newWrap, wrap);
+    const btn = newWrap.querySelector('.data-card-clip-btn');
+    if (!btn) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const card = newWrap.closest('.data-card');
+      if (!card) return;
+      if (card.querySelector('.data-card-header.delete-pending')) return;
+      const item = kcCardItemByEl.get(card);
+      if (!item) return;
+      handleClipButtonClick(item, btn);
+    });
+  });
+}
+// === END PHASE_CARD_CLIPBOARD_COPY ===
 
 function attachUploadHandlers(container) {
   container.querySelectorAll('.data-card-upload').forEach((wrap) => {
@@ -2822,6 +2899,7 @@ function attachCardClickHandlers() {
       // Ignore clicks on the delete button area
       if (e.target.closest('.data-card-delete')) return;
       if (e.target.closest('.data-card-upload')) return;
+      if (e.target.closest('.data-card-clip')) return;
 
       const clickedWrapper = newCard.closest('.card-wrapper');
       if (!clickedWrapper) return;
@@ -2858,6 +2936,9 @@ function attachCardClickHandlers() {
   // === END PHASE_CARD_MULTISELECT ===
 
   attachDeleteHandlers(document);
+  // === PHASE_CARD_CLIPBOARD_COPY ===
+  attachClipHandlers(document);
+  // === END PHASE_CARD_CLIPBOARD_COPY ===
   attachUploadHandlers(document);
 
   document.querySelectorAll('.data-card-imgcontainer').forEach((container) => {
@@ -2902,6 +2983,12 @@ document.addEventListener('keydown', (e) => {
 // Deactivate active card when Chrome window loses focus
 window.addEventListener('blur', () => {
   deactivateAllCards();
+  // === PHASE_CARD_MULTISELECT ===
+  // Empirically (maintainer-verified), clicking the host page DOES blur
+  // the sidepanel window; clear multi-selection together with the active
+  // state so no stale selection survives focus loss.
+  _kcClearCardSelection();
+  // === END PHASE_CARD_MULTISELECT ===
 });
 
 // ── Container drop handlers ───────────────────────────────────────────────────

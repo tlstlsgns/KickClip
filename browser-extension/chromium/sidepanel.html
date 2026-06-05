@@ -677,9 +677,13 @@
       border-color: var(--border-secondary);
       box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
+    /* Active emphasis without layout shift: keep the base 1px border width and
+       add an inset ring instead of widening the border (border-width changes
+       grew the card by ~2px). Visual accent thickness stays ~2px. */
     .card-wrapper.active {
-      border: 2px solid var(--kc-accent);
-      box-shadow: 0 4px 16px rgba(var(--kc-accent-rgb), 0.2);
+      border-color: var(--kc-accent);
+      box-shadow: 0 4px 16px rgba(var(--kc-accent-rgb), 0.2),
+                  inset 0 0 0 1px var(--kc-accent);
     }
     .card-wrapper.is-dragging-source .data-card { opacity: 0.3; }
 
@@ -709,17 +713,11 @@
       border-radius: 4px;
       position: relative;
     }
-    .data-card.kc-card-selected::after {
-      content: '✓';
-      position: absolute;
-      top: 2px;
-      right: 4px;
-      font-size: 10px;
-      font-weight: 700;
-      line-height: 1;
-      color: var(--accent, #BC13FE);
-      pointer-events: none;
-      z-index: 2;
+    /* When the card is also activated, the wrapper already draws the accent
+       ring; suppress the inner selection outline to avoid a doubled border.
+       The selected background tint keeps selection visible. */
+    .card-wrapper.active .data-card.kc-card-selected {
+      outline: none;
     }
     /* === END PHASE_CARD_MULTISELECT === */
     .data-card * { pointer-events: none !important; }
@@ -925,6 +923,54 @@
       display: none;
     }
 
+    /* === PHASE_CARD_CLIPBOARD_COPY === */
+    /* Clip (copy-to-clipboard) button — mirrors .data-card-upload behavior */
+    .data-card-clip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      align-self: stretch;
+      flex-shrink: 0;
+      margin-left: auto;
+      cursor: pointer;
+      pointer-events: auto !important;
+    }
+    .data-card-clip * { pointer-events: auto !important; }
+    .data-card-clip + .data-card-upload { margin-left: 0; }
+    .data-card-clip-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: none;
+      cursor: pointer;
+    }
+    .data-card-clip-btn svg {
+      width: 10px;
+      height: 10px;
+      stroke: rgba(0, 0, 0, 0.5);
+      stroke-width: 2;
+      fill: none;
+      transition: stroke 150ms ease, opacity 150ms ease;
+    }
+    .card-wrapper .data-card-clip-btn svg {
+      opacity: 1;
+      stroke: rgba(0, 0, 0, 0.6);
+      transition: opacity 150ms ease, stroke 150ms ease;
+    }
+    .card-wrapper:not(:hover) .data-card-clip-btn svg {
+      opacity: 0;
+    }
+    .data-card-clip-btn:hover svg {
+      stroke: rgba(0, 0, 0, 0.85);
+    }
+    /* === END PHASE_CARD_CLIPBOARD_COPY === */
+
     /* Upload button — mirrors .data-card-delete hover behavior */
     .data-card-upload {
       display: flex;
@@ -973,10 +1019,12 @@
     }
 
     /* ── Upload result mark overlay (Phase U2) ─────────────────────── */
-    .data-card-upload-btn.kc-upload--feedback svg {
+    .data-card-upload-btn.kc-upload--feedback svg,
+    .data-card-clip-btn.kc-upload--feedback svg {
       opacity: 1 !important;
     }
-    .data-card-upload-btn .kc-upload-mark {
+    .data-card-upload-btn .kc-upload-mark,
+    .data-card-clip-btn .kc-upload-mark {
       display: none;
       width: 10px;
       height: 10px;
@@ -984,18 +1032,22 @@
       stroke-width: 2.5;
       fill: none;
     }
-    .data-card-upload-btn.kc-upload--success .kc-upload-mark.kc-upload-mark--check {
+    .data-card-upload-btn.kc-upload--success .kc-upload-mark.kc-upload-mark--check,
+    .data-card-clip-btn.kc-upload--success .kc-upload-mark.kc-upload-mark--check {
       display: inline-block;
       stroke: #22c55e;
     }
-    .data-card-upload-btn.kc-upload--success svg:not(.kc-upload-mark) {
+    .data-card-upload-btn.kc-upload--success svg:not(.kc-upload-mark),
+    .data-card-clip-btn.kc-upload--success svg:not(.kc-upload-mark) {
       display: none;
     }
-    .data-card-upload-btn.kc-upload--error .kc-upload-mark.kc-upload-mark--x {
+    .data-card-upload-btn.kc-upload--error .kc-upload-mark.kc-upload-mark--x,
+    .data-card-clip-btn.kc-upload--error .kc-upload-mark.kc-upload-mark--x {
       display: inline-block;
       stroke: #ef4444;
     }
-    .data-card-upload-btn.kc-upload--error svg:not(.kc-upload-mark) {
+    .data-card-upload-btn.kc-upload--error svg:not(.kc-upload-mark),
+    .data-card-clip-btn.kc-upload--error svg:not(.kc-upload-mark) {
       display: none;
     }
 

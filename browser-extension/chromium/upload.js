@@ -327,6 +327,41 @@ async function resolveItemImageBlob(item) {
 }
 // === END PHASE_UPLOAD_IMAGE_ONLY ===
 
+// === PHASE_CARD_CLIPBOARD_COPY ===
+// Clipboard-copy resolver: original-quality-first with 3-tier fallback,
+// ALWAYS transcoded to PNG (Clipboard API only accepts image/png for
+// images). Deliberately independent of the kc_upload_format setting.
+// proxiedUrl is built by the caller (side panel owns IMAGE_PROXY_BASE).
+export async function resolveItemClipboardPngBlob(item, proxiedUrl = '') {
+  const imgUrl = String(item?.img_url || '').trim();
+  const b64 = String(item?.img_thumbnail_b64 || '').trim();
+  let blob = null;
+  // Tier 1: original URL via background fetch-image relay (no b64 here)
+  if (imgUrl) {
+    try {
+      const r = await fetchImageAsBlob(imgUrl, '');
+      blob = r.blob;
+    } catch (_) { /* fall through */ }
+  }
+  // Tier 2: image proxy (server-side fetch; helps hotlink-protected CDNs)
+  if (!blob && proxiedUrl && proxiedUrl !== imgUrl) {
+    try {
+      const resp = await fetch(proxiedUrl);
+      if (resp.ok) blob = await resp.blob();
+    } catch (_) { /* fall through */ }
+  }
+  // Tier 3: clip-time thumbnail
+  if (!blob && b64.startsWith('data:')) {
+    try {
+      blob = await (await fetch(b64)).blob();
+    } catch (_) { /* fall through */ }
+  }
+  if (!blob) return null;
+  const out = await transcodeBlobToFormat(blob, 'png');
+  return out && out.blob ? out.blob : null;
+}
+// === END PHASE_CARD_CLIPBOARD_COPY ===
+
 /** @param {FileSystemDirectoryHandle | null} handle */
 async function ensureWritableHandle(handle) {
   if (!handle) return null;
