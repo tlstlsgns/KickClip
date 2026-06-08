@@ -68,6 +68,9 @@ import {
 
 // === PHASE_UPLOAD_FORMAT ===
 const KC_UPLOAD_FORMAT_KEY = 'kc_upload_format';
+// === PHASE_ANON_CLIP_TELEMETRY ===
+const KC_USAGE_STATS_KEY = 'kc_usage_stats_enabled';
+// === END PHASE_ANON_CLIP_TELEMETRY ===
 const KC_UPLOAD_FORMAT_PRESETS = ['original', 'jpg', 'jpeg', 'png', 'webp'];
 const KC_UPLOAD_FORMAT_LABELS = {
   original: 'Original',
@@ -180,6 +183,21 @@ async function _loadUploadFormatSetting() {
     _renderUploadFormatUI('original');
   }
 }
+
+// === PHASE_ANON_CLIP_TELEMETRY ===
+function _initUsageStatsToggle() {
+  const el = document.getElementById('kc-usage-stats-toggle');
+  if (!el) return;
+  chrome.storage.local.get(KC_USAGE_STATS_KEY, (r) => {
+    el.checked = r?.[KC_USAGE_STATS_KEY] !== false; // default ON
+  });
+  el.addEventListener('change', () => {
+    chrome.storage.local
+      .set({ [KC_USAGE_STATS_KEY]: el.checked })
+      .catch(() => {});
+  });
+}
+// === END PHASE_ANON_CLIP_TELEMETRY ===
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes[KC_UPLOAD_FORMAT_KEY]) return;
@@ -335,6 +353,9 @@ async function handleOpenFolderSettings() {
   } catch (_) {}
   await _refreshDirContainer();
   await _loadUploadFormatSetting();
+  // === PHASE_ANON_CLIP_TELEMETRY ===
+  _initUsageStatsToggle();
+  // === END PHASE_ANON_CLIP_TELEMETRY ===
 })();
 
 document.getElementById('kc-upload-format-btn')?.addEventListener('click', (e) => {

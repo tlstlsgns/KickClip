@@ -58,6 +58,11 @@ import {
 import { getShortcut, onShortcutChange, matchesShortcut, formatShortcut } from './shortcutStore.js';
 
 let _kcUserReady = false; // true when kickclipUserId is confirmed
+// === PHASE_ANON_CLIP_TELEMETRY ===
+// Anonymous usage-stats opt-out (default ON). Synced from
+// chrome.storage.local 'kc_usage_stats_enabled'; false => no telemetry.
+let _kcUsageStatsEnabled = true;
+// === END PHASE_ANON_CLIP_TELEMETRY ===
 /** Readable gate for signed-in save / optimistic UI (signed-out = clipboard-only exploration). */
 function isSignedIn() {
   return _kcUserReady === true;
@@ -2708,6 +2713,21 @@ async function saveActiveCoreItem(request = {}) {
       return { success: true, payload };
     }
 
+    // === PHASE_ANON_CLIP_TELEMETRY ===
+    // Logged-out clip: fire-and-forget anonymous aggregate count. Empty
+    // body — no URL/site/page/identifier. Opt-out respected. Never awaited.
+    if (_kcUsageStatsEnabled) {
+      try {
+        fetch(`${KC_SERVER_URL}/api/v1/telemetry/anonymous-clip`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+          keepalive: true,
+        }).catch(() => {});
+      } catch (_) { /* never affect the user */ }
+    }
+    // === END PHASE_ANON_CLIP_TELEMETRY ===
+
     return { success: true };
 }
 
@@ -4444,10 +4464,15 @@ function mountIframeHoverPropagationListener() {
 async function checkKcUserAndInit() {
   try {
     const result = await new Promise((resolve) => {
-      chrome.storage.local.get('kickclipUserId', resolve);
+      // === PHASE_ANON_CLIP_TELEMETRY ===
+      chrome.storage.local.get(['kickclipUserId', 'kc_usage_stats_enabled'], resolve);
+      // === END PHASE_ANON_CLIP_TELEMETRY ===
     });
     const hasUser = !!result?.kickclipUserId;
     _kcUserReady = hasUser;
+    // === PHASE_ANON_CLIP_TELEMETRY ===
+    _kcUsageStatsEnabled = result?.kc_usage_stats_enabled !== false; // default ON
+    // === END PHASE_ANON_CLIP_TELEMETRY ===
   } catch (e) {
     _kcUserReady = false;
   }
@@ -4463,6 +4488,12 @@ function mountKcAuthWatcher() {
   window.__kcAuthWatcherMounted = true;
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+
+    // === PHASE_ANON_CLIP_TELEMETRY ===
+    if ('kc_usage_stats_enabled' in changes) {
+      _kcUsageStatsEnabled = changes.kc_usage_stats_enabled.newValue !== false;
+    }
+    // === END PHASE_ANON_CLIP_TELEMETRY ===
 
     // Sign-in detected
     if (changes.kickclipUserId?.newValue && !_kcUserReady) {

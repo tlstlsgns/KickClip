@@ -227,6 +227,17 @@
       border-bottom: 1px solid rgba(0, 0, 0, 0.06);
       background: rgba(0, 0, 0, 0.02);
     }
+    /* === PHASE_ANON_CLIP_TELEMETRY === */
+    .kc-usage-stats-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px;
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.55);
+    }
+    .kc-usage-stats-toggle { cursor: pointer; }
+    /* === END PHASE_ANON_CLIP_TELEMETRY === */
     .kc-dir-folder-btn {
       flex: 1 1 auto;
       min-width: 0;
@@ -1294,6 +1305,13 @@
         </div>
         <!-- === END PHASE_UPLOAD_FORMAT === -->
       </div>
+
+      <!-- === PHASE_ANON_CLIP_TELEMETRY === -->
+      <div class="kc-usage-stats-row" id="kc-usage-stats-row">
+        <label class="kc-usage-stats-label" for="kc-usage-stats-toggle">익명 사용 통계 전송</label>
+        <input type="checkbox" id="kc-usage-stats-toggle" class="kc-usage-stats-toggle" checked />
+      </div>
+      <!-- === END PHASE_ANON_CLIP_TELEMETRY === -->
 
       <!-- Directory list -->
       <div id="sp-directory-list"></div>
