@@ -153,11 +153,10 @@
 <p>SeaClip은 다음 Chrome 권한을 요청하며 다음과 같이 사용합니다:</p>
 <ul>
   <li><code>storage</code> — 사용자 환경 설정(저장 대상, UI 설정)을 <code>chrome.storage.local</code>로 기기 로컬에만 저장.</li>
-  <li><code>downloads</code> — 로컬 폴더를 저장 대상으로 선택한 경우, 그 폴더에 파일 다운로드.</li>
+  <li><code>downloads</code> — Downloads 폴더에 저장할 때, 클립한 이미지 파일을 그 폴더에 기록하기 위함.</li>
   <li><code>scripting</code> — 저장 단축키를 누른 순간에 활성 탭에 메타데이터 추출 content script 주입. 페이지 모니터링에는 사용하지 않습니다.</li>
   <li><code>tabs</code> — 저장 순간에 활성 탭의 URL과 제목을 읽고, 사이드 패널 UI와 content script 간 메시지 전달.</li>
-  <li><code>contextMenus</code> — Chrome 우클릭 메뉴에 "SeaClip으로 저장" 항목 추가(키보드 단축키의 대안).</li>
-  <li><code>windows</code> — SeaClip 보조 창(폴더 picker, 팝업 알림)의 라이프사이클 관리.</li>
+  <li><code>windows</code> — 로컬 저장 폴더를 고를 때 사용하는 SeaClip 폴더 선택 팝업 창을 열고 닫기 위함.</li>
   <li><code>sidePanel</code> — Chrome 사이드 패널에 SeaClip 메인 UI 표시. 사용자가 저장 항목을 카테고리별로 탐색하는 곳입니다.</li>
   <li><code>identity</code> — OAuth 2.0을 통한 Google 로그인. 계정 식별 및 Drive 접근 요청(<code>drive.file</code> scope만).</li>
   <li><code>clipboardWrite</code> — 클립한 이미지를 클립보드에 복사하기 위함: 저장 단축키는 클립한 이미지를 복사하고, 사이드 패널의 복사 버튼은 저장 항목의 이미지를 복사하여 다른 앱에 바로 붙여넣을 수 있게 합니다. SeaClip은 클립보드에 이미지 데이터만 기록하며, 복사는 로컬에서 이뤄지고 전송되지 않습니다.</li>

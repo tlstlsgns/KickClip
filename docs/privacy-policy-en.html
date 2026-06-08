@@ -153,11 +153,10 @@
 <p>SeaClip requests the following Chrome permissions and uses them as follows:</p>
 <ul>
   <li><code>storage</code> — To store your preferences (save destination, UI settings) via <code>chrome.storage.local</code> on your device only.</li>
-  <li><code>downloads</code> — When you choose a local folder as your save destination, to download saved files to that folder.</li>
+  <li><code>downloads</code> — When you save to your Downloads folder, to write the clipped image file there.</li>
   <li><code>scripting</code> — To inject the metadata-extraction content script into the active tab at the moment you press the save shortcut. Not used to monitor pages otherwise.</li>
   <li><code>tabs</code> — To read the active tab's URL and title at the moment you save, and to coordinate messages between the side panel UI and content scripts.</li>
-  <li><code>contextMenus</code> — To add a "Save with SeaClip" entry to Chrome's right-click menu as an alternative to the keyboard shortcut.</li>
-  <li><code>windows</code> — To manage the lifecycle of SeaClip's auxiliary windows (folder picker, popup notifications).</li>
+  <li><code>windows</code> — To open and close SeaClip's folder-picker popup window, used when you choose a local save folder.</li>
   <li><code>sidePanel</code> — To display SeaClip's main UI in Chrome's side panel, where you browse saved items by category.</li>
   <li><code>identity</code> — For Google sign-in via OAuth 2.0 to identify your account and request access to your Drive (only with <code>drive.file</code> scope).</li>
   <li><code>clipboardWrite</code> — To copy a clipped image to your clipboard: the save shortcut copies the image you clip, and the side panel's Copy button copies a saved item's image, so you can paste it directly into another app. SeaClip writes only image data to the clipboard; the copy happens locally and is not transmitted.</li>
