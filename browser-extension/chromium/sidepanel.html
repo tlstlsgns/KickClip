@@ -362,6 +362,102 @@
         color: var(--accent);
       }
       /* === END PHASE_CARD_MULTISELECT === */
+      .sp-bgr-preview-stage {
+        background-color: #1a1a1a;
+        background-image:
+          linear-gradient(45deg, #333 25%, transparent 25%),
+          linear-gradient(-45deg, #333 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, #333 75%),
+          linear-gradient(-45deg, transparent 75%, #333 75%);
+      }
+    }
+
+    /* ── BGR preview pane ── */
+    #sp-bgr-preview {
+      width: 100%;
+      margin: 6px 0;
+      padding: 0 12px;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    .sp-bgr-preview-stage {
+      position: relative;
+      width: 100%;
+      max-height: 240px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #fff;
+      background-image:
+        linear-gradient(45deg, #d9d9d9 25%, transparent 25%),
+        linear-gradient(-45deg, #d9d9d9 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #d9d9d9 75%),
+        linear-gradient(-45deg, transparent 75%, #d9d9d9 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .sp-bgr-preview-img {
+      max-width: 100%;
+      max-height: 240px;
+      object-fit: contain;
+      display: block;
+    }
+    .sp-bgr-preview-spinner {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 28px;
+      height: 28px;
+      margin: -14px 0 0 -14px;
+      border: 3px solid rgba(0, 0, 0, 0.12);
+      border-top-color: var(--kc-accent, #BC13FE);
+      border-radius: 50%;
+      animation: sp-bgr-spin 0.7s linear infinite;
+    }
+    .sp-bgr-preview-spinner[hidden] {
+      display: none;
+    }
+    @keyframes sp-bgr-spin {
+      to { transform: rotate(360deg); }
+    }
+    .sp-bgr-preview-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .sp-bgr-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: rgba(0, 0, 0, 0.55);
+      cursor: pointer;
+      transition: color 150ms ease, background 150ms ease, opacity 150ms ease;
+    }
+    .sp-bgr-btn:hover:not(:disabled) {
+      color: var(--kc-accent, #BC13FE);
+      background: rgba(var(--kc-accent-rgb, 188, 19, 254), 0.1);
+    }
+    .sp-bgr-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .sp-bgr-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
     }
 
     /* ── Directory list ── */
@@ -1293,6 +1389,24 @@
           <ul id="kc-upload-format-menu" class="kc-upload-format-menu" role="listbox" hidden></ul>
         </div>
         <!-- === END PHASE_UPLOAD_FORMAT === -->
+      </div>
+
+      <div id="sp-bgr-preview" class="sp-bgr-preview" style="display:none;">
+        <div class="sp-bgr-preview-stage">
+          <img class="sp-bgr-preview-img" alt="" />
+          <div class="sp-bgr-preview-spinner" hidden></div>
+        </div>
+        <div class="sp-bgr-preview-actions">
+          <button type="button" id="sp-bgr-cutout-btn" class="sp-bgr-btn" title="배경 제거 (누끼)">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="6" cy="6" r="3"></circle>
+              <circle cx="6" cy="18" r="3"></circle>
+              <line x1="20" y1="4" x2="8.12" y2="15.88"></line>
+              <line x1="14.47" y1="14.48" x2="20" y2="20"></line>
+              <line x1="8.12" y1="8.12" x2="12" y2="12"></line>
+            </svg>
+          </button>
+        </div>
       </div>
 
       <!-- Directory list -->

@@ -504,6 +504,90 @@ const optimisticCards = new Map();
 // (used by upload UI — WeakMap avoids retaining detached DOM).
 const kcCardItemByEl = new WeakMap();
 
+let _bgrItem = null;
+let _bgrObjectUrl = null;
+let _bgrBusy = false;
+
+function getBgrEls() {
+  const root = document.getElementById('sp-bgr-preview');
+  if (!root) return null;
+  return {
+    root,
+    img: root.querySelector('.sp-bgr-preview-img'),
+    spinner: root.querySelector('.sp-bgr-preview-spinner'),
+    btn: document.getElementById('sp-bgr-cutout-btn'),
+  };
+}
+
+function showBgrPreview(item) {
+  const els = getBgrEls();
+  if (!els?.root || !els.img) return;
+  if (!item) {
+    hideBgrPreview();
+    return;
+  }
+  _bgrItem = item;
+  if (_bgrObjectUrl) {
+    URL.revokeObjectURL(_bgrObjectUrl);
+    _bgrObjectUrl = null;
+  }
+  const thumbUrl = getCardThumbnailUrl(item);
+  els.img.src = thumbUrl ? getProxiedImageUrl(thumbUrl) : '';
+  els.img.alt = String(item.title || 'Preview');
+  if (els.spinner) els.spinner.hidden = true;
+  if (els.btn) els.btn.disabled = false;
+  _bgrBusy = false;
+  els.root.style.display = '';
+}
+
+function hideBgrPreview() {
+  const els = getBgrEls();
+  if (els?.root) els.root.style.display = 'none';
+  if (_bgrObjectUrl) {
+    URL.revokeObjectURL(_bgrObjectUrl);
+    _bgrObjectUrl = null;
+  }
+  _bgrItem = null;
+  _bgrBusy = false;
+}
+
+async function onBgrCutoutClick() {
+  const els = getBgrEls();
+  if (_bgrBusy || !_bgrItem || !els?.img) return;
+  _bgrBusy = true;
+  if (els.btn) els.btn.disabled = true;
+  if (els.spinner) els.spinner.hidden = false;
+  try {
+    const imgUrl = String(_bgrItem?.img_url || '').trim();
+    const proxied = getProxiedImageUrl(imgUrl);
+    const blob = await resolveItemClipboardPngBlob(
+      _bgrItem,
+      proxied && proxied !== imgUrl ? proxied : ''
+    );
+    if (!blob) throw new Error('clipboard image resolve failed');
+    const cutout = await removeBackgroundPngBlob(blob, (s) => console.log('[SEACLIP-BGR]', s));
+    if (_bgrObjectUrl) URL.revokeObjectURL(_bgrObjectUrl);
+    _bgrObjectUrl = URL.createObjectURL(cutout);
+    els.img.src = _bgrObjectUrl;
+  } catch (e) {
+    console.error('[SEACLIP-BGR] cutout failed', e);
+  } finally {
+    if (els.spinner) els.spinner.hidden = true;
+    if (els.btn) els.btn.disabled = false;
+    _bgrBusy = false;
+  }
+}
+
+function _initBgrPreview() {
+  const els = getBgrEls();
+  if (!els?.btn || els.btn.dataset.bgrBound === 'true') return;
+  els.btn.dataset.bgrBound = 'true';
+  els.btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onBgrCutoutClick();
+  });
+}
+
 /** @type {HTMLDivElement | null} */
 let kcUploadPopoverEl = null;
 /** @type {(() => void) | null} */
@@ -530,6 +614,8 @@ const spAiBoardLoading = document.getElementById('sp-ai-board-loading');
 const spAiBoardTitle   = document.getElementById('sp-ai-board-title');
 const spAiBoardBody    = document.getElementById('sp-ai-board-body');
 const spAiBoardClose   = document.getElementById('sp-ai-board-close');
+
+_initBgrPreview();
 
 // TEMP_BGR_TEST — dev-only cutout test button (remove in Step 3)
 function _tempBgrTestInit() {
@@ -2858,6 +2944,7 @@ function deactivateAllCards() {
   document.querySelectorAll('.card-wrapper.active').forEach((w) => {
     w.classList.remove('active');
   });
+  hideBgrPreview();
 }
 
 function attachCardClickHandlers() {
@@ -2964,6 +3051,7 @@ function attachCardClickHandlers() {
         // First click → activate this card, deactivate all others
         deactivateAllCards();
         clickedWrapper.classList.add('active');
+        showBgrPreview(kcCardItemByEl.get(newCard));
       }
     });
 
@@ -3001,7 +3089,7 @@ function attachCardClickHandlers() {
 
 // Deactivate active card when clicking outside any card-wrapper
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.card-wrapper')) {
+  if (!e.target.closest('.card-wrapper') && !e.target.closest('#sp-bgr-preview')) {
     deactivateAllCards();
   }
   // === PHASE_CARD_MULTISELECT ===
@@ -3016,6 +3104,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   dismissClearConfirmPendingIfActive();
   _kcClearCardSelection();
+  hideBgrPreview();
 });
 // === END PHASE_CARD_MULTISELECT ===
 
