@@ -2,18 +2,25 @@
 const fs = require('fs');
 const path = require('path');
 
-const ORT_DIST_FILES = [
-  'ort.webgpu.bundle.min.mjs',
-  'ort-wasm-simd-threaded.jsep.wasm',
-  'ort-wasm-simd-threaded.wasm',
-];
+const WEBGPU_BUNDLE = 'ort.webgpu.bundle.min.mjs';
+const ORT_WASM_RE = /^ort-wasm-.*\.(mjs|wasm)$/;
 
 const srcModelsDir = path.join(__dirname, '..', 'chromium', 'vendor', 'models');
 
+function resolveOrtDistFiles(ortDistDir) {
+  const entries = fs.readdirSync(ortDistDir, { withFileTypes: true });
+  const wasmFiles = entries
+    .filter((e) => e.isFile() && ORT_WASM_RE.test(e.name))
+    .map((e) => e.name)
+    .sort();
+  return [WEBGPU_BUNDLE, ...wasmFiles];
+}
+
 function copyOrtVendor(destDir) {
   const ortDistDir = path.join(__dirname, '..', 'node_modules', 'onnxruntime-web', 'dist');
+  const files = resolveOrtDistFiles(ortDistDir);
   fs.mkdirSync(destDir, { recursive: true });
-  for (const name of ORT_DIST_FILES) {
+  for (const name of files) {
     const src = path.join(ortDistDir, name);
     if (!fs.existsSync(src)) {
       console.error(`ERROR: missing onnxruntime-web dist file: ${src}`);
@@ -21,7 +28,9 @@ function copyOrtVendor(destDir) {
     }
     fs.copyFileSync(src, path.join(destDir, name));
   }
-  console.log(`[copy-ort-vendor] ${ORT_DIST_FILES.join(', ')} → ${destDir}`);
+  console.log(`[copy-ort-vendor] ${files.length} file(s) → ${destDir}`);
+  console.log(`[copy-ort-vendor] ${files.join(', ')}`);
+  return files;
 }
 
 function copyVendorModels(destVendorDir) {
@@ -48,4 +57,4 @@ function copyVendorModels(destVendorDir) {
   console.log(`[copy-ort-vendor] models (${copied} file(s)) → ${destModelsDir}`);
 }
 
-module.exports = { copyOrtVendor, copyVendorModels, ORT_DIST_FILES };
+module.exports = { copyOrtVendor, copyVendorModels, resolveOrtDistFiles, WEBGPU_BUNDLE, ORT_WASM_RE };
