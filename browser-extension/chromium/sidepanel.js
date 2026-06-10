@@ -571,7 +571,7 @@ function setBgrBtnMode(mode) {
   if (!btn) return;
   btn.dataset.mode = mode;
   btn.innerHTML = mode === 'clip' ? BGR_CLIP_SVG : BGR_SCISSORS_SVG;
-  btn.title = mode === 'clip' ? '클립보드 복사' : '배경 제거 (누끼)';
+  btn.title = mode === 'clip' ? 'Copy to clipboard' : 'Remove background';
 }
 
 function getBgrEls() {
