@@ -302,7 +302,10 @@ function resolveUploadExtension(resolved, blob) {
 //   3) neither -> null (caller emits its existing no-image failure).
 // The legacy non-Image -> markdown export (Phase U2) is removed: SNS and
 // category-less clips now upload their image like everything else.
-async function resolveItemImageBlob(item) {
+async function resolveItemImageBlob(item, opts = {}) {
+  if (opts.blobOverride instanceof Blob) {
+    return { blob: opts.blobOverride, usedFallback: false, srcUrl: '', forcedExt: 'png' };
+  }
   const imgUrl = String(item?.img_url || '').trim();
   const b64 = String(item?.img_thumbnail_b64 || '').trim();
   const applyFormat = async (base) => {
@@ -454,13 +457,13 @@ export async function refreshPrimaryHandleCache() {
  * @param {object} item
  * @returns {Promise<{ ok: true, filename: string } | { ok: false, reason: string, message?: string }>}
  */
-export async function saveItemViaDownloads(item) {
+export async function saveItemViaDownloads(item, opts = {}) {
   try {
     let blob;
     let ext;
     let usedFallback = false;
 
-    const resolved = await resolveItemImageBlob(item);
+    const resolved = await resolveItemImageBlob(item, opts);
     if (!resolved) {
       return { ok: false, reason: 'generic', message: 'No image URL' };
     }
@@ -574,7 +577,7 @@ export async function saveItemViaDownloads(item) {
  * @param {object} item
  * @returns {Promise<{ ok: true, filename: string, primaryFolderName: string } | { ok: false, reason: string, message?: string }>}
  */
-export async function writeItemToHandle(handle, item) {
+export async function writeItemToHandle(handle, item, opts = {}) {
   try {
     const writable = await ensureWritableHandle(handle);
     if (!writable) {
@@ -585,7 +588,7 @@ export async function writeItemToHandle(handle, item) {
     let ext;
     let usedFallback = false;
 
-    const resolved = await resolveItemImageBlob(item);
+    const resolved = await resolveItemImageBlob(item, opts);
     if (!resolved) {
       return { ok: false, reason: 'generic', message: 'No image URL' };
     }
@@ -664,19 +667,23 @@ function blobToBase64(blob) {
  * @returns {Promise<{ ok: true, desiredName: string, mimeType: string, contentBase64: string }
  *   | { ok: false, reason: 'generic', message: string }>}
  */
-export async function buildDriveUploadPayload(item) {
+export async function buildDriveUploadPayload(item, opts = {}) {
   try {
     let blob;
     let ext;
     let mimeType;
 
-    const resolved = await resolveItemImageBlob(item);
+    const resolved = await resolveItemImageBlob(item, opts);
     if (!resolved) {
       return { ok: false, reason: 'generic', message: 'No image URL' };
     }
     blob = resolved.blob;
     ext = resolveUploadExtension(resolved, blob);
-    mimeType = blob.type || (ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`);
+    if (resolved.forcedExt === 'png') {
+      mimeType = 'image/png';
+    } else {
+      mimeType = blob.type || (ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`);
+    }
 
     const rawTitle = (item.title || '').trim();
     let base = rawTitle ? rawTitle : fallbackFilenameBase(item);
@@ -713,13 +720,13 @@ export async function buildDriveUploadPayload(item) {
 // @returns {Promise<{ ok: true, filename: string } |
 //                   { ok: false, reason: 'cancelled' | 'generic',
 //                                message?: string }>}
-export async function saveItemToDownloads(item) {
+export async function saveItemToDownloads(item, opts = {}) {
   try {
     let blob;
     let ext;
     let usedFallback = false;
 
-    const resolved = await resolveItemImageBlob(item);
+    const resolved = await resolveItemImageBlob(item, opts);
     if (!resolved) {
       return { ok: false, reason: 'generic', message: 'No image URL' };
     }
