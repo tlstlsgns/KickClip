@@ -3559,6 +3559,18 @@ function performSyncClipboardWrite(state) {
       const dataUrlPromise = combinedPromise.then((r) => r?.dataUrl || null);
       return attachThumbnailPromiseToClipboardWrite(blobPromise, dataUrlPromise);
     }
+    // === PHASE_IMG_DOMINANT_NO_URL_CLIP ===
+    // No extracted meta.image.url (e.g. Google AI-overview image strip, whose thumbnails are
+    // inline data: URLs that resolveClipImageUrl intentionally drops so they aren't persisted
+    // as a low-res img_url) but the dominant <img> still carries usable pixels. Without this,
+    // the flow bails ('no imageUrl and no video dominant') and shows "Clip failed" though the
+    // image is right there. Clip the dominant image element directly. SAVE/img_url path is
+    // unchanged; RemoveBg routing preserved via attachThumbnailPromiseToClipboardWrite.
+    if (dominantEl && dominantEl.src) {
+      const blobPromise = imgElementToBlob(dominantEl).catch(() => null);
+      return attachThumbnailPromiseToClipboardWrite(blobPromise);
+    }
+    // === END PHASE_IMG_DOMINANT_NO_URL_CLIP ===
   }
 
   return null;
